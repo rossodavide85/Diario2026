@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -36,6 +37,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
@@ -159,6 +161,18 @@ private enum class FilterType(val label: String, val emoji: String, val color: C
     }
 }
 
+data class Streaks(val current: Int, val longest: Int)
+
+data class PeriodStats(
+    val label: String,
+    val total: Int,
+    val alcoholYes: Int,
+    val alcoholNo: Int,
+    val run: Int,
+    val walk: Int,
+    val rest: Int
+)
+
 // ---------------------------------------------------------------------------
 // Activity
 // ---------------------------------------------------------------------------
@@ -202,6 +216,7 @@ fun DiaryApp() {
 
     var editingKey by remember { mutableStateOf<String?>(null) }
     var filter by remember { mutableStateOf<FilterType?>(null) }
+    var showStats by remember { mutableStateOf(false) }
 
     val counts by remember {
         derivedStateOf {
@@ -276,6 +291,12 @@ fun DiaryApp() {
         Column(Modifier.padding(pad).fillMaxSize()) {
             StatsRow(counts) { filter = it }
             Legend()
+            FilledTonalButton(
+                onClick = { showStats = true },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                Text("📊  Statistiche & serie")
+            }
             LazyColumn(
                 state = listState,
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
@@ -313,6 +334,10 @@ fun DiaryApp() {
 
     filter?.let { f ->
         FilterScreen(filter = f, data = data, onClose = { filter = null })
+    }
+
+    if (showStats) {
+        StatsScreen(data = data, onClose = { showStats = false })
     }
 }
 
@@ -563,6 +588,134 @@ private fun ChoiceChip(label: String, selected: Boolean, accent: Color, onClick:
 // ---------------------------------------------------------------------------
 
 @Composable
+private fun StatsScreen(
+    data: SnapshotStateMap<String, DayRecord>,
+    onClose: () -> Unit
+) {
+    val streaks = alcoholFreeStreaks(data)
+    val months = monthlyStats(data)
+    val weeks = weeklyStats(data)
+
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onClose) { Text("‹ Indietro") }
+                    Spacer(Modifier.width(4.dp))
+                    Text("📊 Statistiche", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                }
+                LazyColumn(
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    item { StreakCard(streaks) }
+                    item { SectionTitle("Per mese") }
+                    if (months.isEmpty()) item { EmptyHint() }
+                    items(months.size) { i -> PeriodCard(months[i]) }
+                    item { SectionTitle("Per settimana") }
+                    if (weeks.isEmpty()) item { EmptyHint() }
+                    items(weeks.size) { i -> PeriodCard(weeks[i]) }
+                    item { Spacer(Modifier.height(12.dp)) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StreakCard(s: Streaks) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Row(
+            Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("🔥 ${s.current}", fontSize = 30.sp, fontWeight = FontWeight.ExtraBold, color = CWater)
+                Text("Serie senza alcool (giorni)", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Column(Modifier.weight(1f)) {
+                Text("🏆 ${s.longest}", fontSize = 30.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
+                Text("Record", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionTitle(text: String) {
+    Text(
+        text,
+        modifier = Modifier.padding(top = 8.dp, start = 4.dp),
+        fontSize = 15.sp,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onSurface
+    )
+}
+
+@Composable
+private fun EmptyHint() {
+    Text(
+        "Nessun dato ancora.",
+        modifier = Modifier.padding(4.dp),
+        fontSize = 13.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+
+@Composable
+private fun PeriodCard(s: PeriodStats) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(
+            Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                "${s.label} · ${s.total} ${if (s.total == 1) "giorno" else "giorni"}",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            StackedBar(listOf(s.alcoholNo to CWater, s.alcoholYes to CAlcohol))
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                MiniLegend("💧", s.alcoholNo)
+                MiniLegend("🍺", s.alcoholYes)
+            }
+            Spacer(Modifier.height(2.dp))
+            StackedBar(listOf(s.run to CRun, s.walk to CWalk, s.rest to CRest))
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                MiniLegend("🏃", s.run)
+                MiniLegend("🚶", s.walk)
+                MiniLegend("😴", s.rest)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MiniLegend(emoji: String, n: Int) {
+    Text("$emoji $n", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+@Composable
+private fun StackedBar(segments: List<Pair<Int, Color>>) {
+    val total = segments.sumOf { it.first }
+    Row(
+        Modifier.fillMaxWidth().height(16.dp).clip(RoundedCornerShape(8.dp))
+    ) {
+        if (total == 0) {
+            Box(Modifier.weight(1f).fillMaxHeight().background(MaterialTheme.colorScheme.surface))
+        } else {
+            segments.forEach { (v, c) ->
+                if (v > 0) Box(Modifier.weight(v.toFloat()).fillMaxHeight().background(c))
+            }
+        }
+    }
+}
+
+@Composable
 private fun FilterScreen(
     filter: FilterType,
     data: SnapshotStateMap<String, DayRecord>,
@@ -644,6 +797,69 @@ private fun describe(rec: DayRecord): String {
 private val WEEKDAYS = arrayOf(
     "Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"
 )
+
+private val MONTHS_ABBR = arrayOf(
+    "Gen", "Feb", "Mar", "Apr", "Mag", "Giu", "Lug", "Ago", "Set", "Ott", "Nov", "Dic"
+)
+
+/** Serie di giorni consecutivi senza alcool (alcohol == "no"). Un giorno con
+ *  alcool o non registrato interrompe la serie. */
+private fun alcoholFreeStreaks(data: Map<String, DayRecord>): Streaks {
+    val cleanDates = data.entries
+        .filter { it.value.alcohol == "no" }
+        .map { LocalDate.parse(it.key) }
+        .sorted()
+    if (cleanDates.isEmpty()) return Streaks(0, 0)
+
+    var longest = 1
+    var run = 1
+    for (i in 1 until cleanDates.size) {
+        run = if (cleanDates[i] == cleanDates[i - 1].plusDays(1)) run + 1 else 1
+        if (run > longest) longest = run
+    }
+
+    var current = 1
+    for (i in cleanDates.size - 1 downTo 1) {
+        if (cleanDates[i] == cleanDates[i - 1].plusDays(1)) current++ else break
+    }
+    return Streaks(current, longest)
+}
+
+private fun statsFrom(label: String, recs: Collection<DayRecord>): PeriodStats {
+    var ay = 0; var an = 0; var r = 0; var w = 0; var rest = 0
+    recs.forEach {
+        when (it.alcohol) { "yes" -> ay++; "no" -> an++ }
+        when (it.activity) { "run" -> r++; "walk" -> w++; "rest" -> rest++ }
+    }
+    return PeriodStats(label, recs.size, ay, an, r, w, rest)
+}
+
+private fun monthlyStats(data: Map<String, DayRecord>): List<PeriodStats> {
+    val result = ArrayList<PeriodStats>()
+    for (m in 1..12) {
+        val prefix = "%04d-%02d".format(YEAR, m)
+        val recs = data.filterKeys { it.startsWith(prefix) }.values
+        if (recs.isNotEmpty()) result.add(statsFrom(MONTHS[m - 1], recs))
+    }
+    return result
+}
+
+private fun weeklyStats(data: Map<String, DayRecord>): List<PeriodStats> {
+    val byWeek = LinkedHashMap<LocalDate, MutableList<DayRecord>>()
+    data.entries
+        .map { LocalDate.parse(it.key) to it.value }
+        .sortedBy { it.first }
+        .forEach { (date, rec) ->
+            val monday = date.minusDays(((date.dayOfWeek.value + 6) % 7).toLong())
+            byWeek.getOrPut(monday) { mutableListOf() }.add(rec)
+        }
+    return byWeek.map { (monday, recs) ->
+        val sunday = monday.plusDays(6)
+        val label = "${monday.dayOfMonth} ${MONTHS_ABBR[monday.monthValue - 1]} – " +
+            "${sunday.dayOfMonth} ${MONTHS_ABBR[sunday.monthValue - 1]}"
+        statsFrom(label, recs)
+    }
+}
 
 private fun labelForFull(key: String): String {
     val d = LocalDate.parse(key)
