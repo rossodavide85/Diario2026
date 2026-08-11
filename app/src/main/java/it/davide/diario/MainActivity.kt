@@ -60,6 +60,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -445,11 +447,13 @@ private fun DayCell(day: Int, rec: DayRecord?, isToday: Boolean, onClick: () -> 
             "$day",
             modifier = Modifier.padding(top = 2.dp),
             fontSize = 11.sp,
+            lineHeight = 12.sp,
             color = MaterialTheme.colorScheme.onSurface,
-            fontWeight = FontWeight.SemiBold
+            fontWeight = FontWeight.SemiBold,
+            style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
         )
-        // Icon just below the number with a small gap: a middle ground between
-        // dead-centre (overlapped the number) and centred-in-lower-space (too low).
+        // Icon sits right under the number. includeFontPadding=false removes the
+        // phantom top space emoji otherwise get, so it reads high instead of low.
         Box(
             modifier = Modifier.fillMaxWidth().weight(1f),
             contentAlignment = Alignment.TopCenter
@@ -463,10 +467,16 @@ private fun DayCell(day: Int, rec: DayRecord?, isToday: Boolean, onClick: () -> 
                 }
             }
             if (icons.isNotEmpty()) {
-                Text(icons, modifier = Modifier.padding(top = 4.dp), fontSize = 13.sp)
+                Text(
+                    icons,
+                    modifier = Modifier.padding(top = 1.dp),
+                    fontSize = 13.sp,
+                    lineHeight = 13.sp,
+                    style = TextStyle(platformStyle = PlatformTextStyle(includeFontPadding = false))
+                )
             } else if (rec?.activity == "rest") {
                 // logged rest day: a small dot, no icon
-                Box(Modifier.padding(top = 4.dp).size(7.dp).clip(CircleShape).background(CRest))
+                Box(Modifier.padding(top = 2.dp).size(7.dp).clip(CircleShape).background(CRest))
             }
         }
     }
