@@ -443,15 +443,16 @@ private fun DayCell(day: Int, rec: DayRecord?, isToday: Boolean, onClick: () -> 
         // Day number pinned at the top.
         Text(
             "$day",
-            modifier = Modifier.padding(top = 3.dp),
+            modifier = Modifier.padding(top = 2.dp),
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurface,
             fontWeight = FontWeight.SemiBold
         )
-        // Icon centered in the remaining space below the number (no overlap).
+        // Icon just below the number with a small gap: a middle ground between
+        // dead-centre (overlapped the number) and centred-in-lower-space (too low).
         Box(
             modifier = Modifier.fillMaxWidth().weight(1f),
-            contentAlignment = Alignment.Center
+            contentAlignment = Alignment.TopCenter
         ) {
             // Icons per the rules: alcohol-yes and run/walk only. No icon for alcohol-no or rest.
             val icons = buildString {
@@ -462,10 +463,10 @@ private fun DayCell(day: Int, rec: DayRecord?, isToday: Boolean, onClick: () -> 
                 }
             }
             if (icons.isNotEmpty()) {
-                Text(icons, fontSize = 13.sp)
+                Text(icons, modifier = Modifier.padding(top = 4.dp), fontSize = 13.sp)
             } else if (rec?.activity == "rest") {
                 // logged rest day: a small dot, no icon
-                Box(Modifier.size(7.dp).clip(CircleShape).background(CRest))
+                Box(Modifier.padding(top = 4.dp).size(7.dp).clip(CircleShape).background(CRest))
             }
         }
     }
