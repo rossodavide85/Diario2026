@@ -17,13 +17,29 @@ android {
         versionName = "1.0"
     }
 
+    // Chiave di firma stabile (personale): così ogni nuova build si installa
+    // sopra la precedente senza dover disinstallare. Password volutamente in chiaro:
+    // è un'app personale non pubblicata, la chiave non protegge nulla di sensibile.
+    signingConfigs {
+        create("stable") {
+            storeFile = file("../diario.keystore")
+            storePassword = "diario2026"
+            keyAlias = "diario"
+            keyPassword = "diario2026"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("stable")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        debug {
+            signingConfig = signingConfigs.getByName("stable")
         }
     }
 

@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -26,12 +29,28 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+      - name: Build signed release APK
+        run: gradle assembleRelease --no-daemon --stacktrace
 
-      - name: Upload APK
+      - name: Rename APK
+        run: cp app/build/outputs/apk/release/app-release.apk Diario2026.apk
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: diario2026-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: diario2026-apk
+          path: Diario2026.apk
           if-no-files-found: error
+
+      - name: Publish rolling release (link fisso)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: "Diario 2026 — ultima versione"
+          body: |
+            APK firmato, sempre aggiornato all'ultimo commit su `main`.
+            Scarica **Diario2026.apk** qui sotto e installalo sul telefono.
+            Link diretto permanente:
+            https://github.com/rossodavide85/Diario2026/releases/latest/download/Diario2026.apk
+          files: Diario2026.apk
+          fail_on_unmatched_files: true
