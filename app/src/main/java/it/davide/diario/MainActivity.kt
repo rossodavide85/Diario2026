@@ -413,35 +413,36 @@ private fun DayCell(day: Int, rec: DayRecord?, isToday: Boolean, onClick: () -> 
     val withBorder = if (isToday)
         base.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp)) else base
 
-    Box(
-        modifier = withBorder.clickable { onClick() },
-        contentAlignment = Alignment.TopCenter
-    ) {
-        Column(
-            Modifier.fillMaxWidth().padding(top = 3.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
+    Box(modifier = withBorder.clickable { onClick() }) {
+        // Day number stays in the usual top corner.
+        Text(
+            "$day",
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 4.dp),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurface,
+            fontWeight = FontWeight.SemiBold
+        )
+        // Icons per the rules: alcohol-yes and run/walk only. No icon for alcohol-no or rest.
+        val icons = buildString {
+            if (rec?.alcohol == "yes") append("🍺")
+            when (rec?.activity) {
+                "run" -> append("🏃")
+                "walk" -> append("🚶")
+            }
+        }
+        if (icons.isNotEmpty()) {
+            // Centered vertically in the cell.
             Text(
-                "$day",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.SemiBold
+                icons,
+                modifier = Modifier.align(Alignment.Center).padding(top = 3.dp),
+                fontSize = 14.sp
             )
-            // Icons per the rules: alcohol-yes and run/walk only. No icon for alcohol-no or rest.
-            val icons = buildString {
-                if (rec?.alcohol == "yes") append("🍺")
-                when (rec?.activity) {
-                    "run" -> append("🏃")
-                    "walk" -> append("🚶")
-                }
-            }
-            if (icons.isNotEmpty()) {
-                Text(icons, fontSize = 11.sp)
-            } else if (rec?.activity == "rest") {
-                // logged rest day: a small dot so it's visibly recorded, but no icon
-                Spacer(Modifier.height(2.dp))
-                Box(Modifier.size(6.dp).clip(CircleShape).background(CRest))
-            }
+        } else if (rec?.activity == "rest") {
+            // logged rest day: a small centered dot, no icon
+            Box(
+                Modifier.align(Alignment.Center).padding(top = 3.dp)
+                    .size(7.dp).clip(CircleShape).background(CRest)
+            )
         }
     }
 }
