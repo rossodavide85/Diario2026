@@ -2,13 +2,17 @@
 
 package it.davide.diario
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -33,6 +37,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -41,6 +46,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -65,6 +71,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -84,7 +91,12 @@ import java.time.YearMonth
 const val YEAR = 2026
 
 @Serializable
-data class DayRecord(val alcohol: String? = null, val activity: String? = null) {
+data class DayRecord(
+    val alcohol: String? = null,
+    val activity: String? = null,
+    val distanceKm: Double? = null,
+    val durationMin: Int? = null
+) {
     val isEmpty: Boolean get() = alcohol == null && activity == null
 }
 
@@ -170,7 +182,9 @@ data class PeriodStats(
     val alcoholNo: Int,
     val run: Int,
     val walk: Int,
-    val rest: Int
+    val rest: Int,
+    val totalKm: Double,
+    val totalMin: Int
 )
 
 // ---------------------------------------------------------------------------
@@ -178,8 +192,22 @@ data class PeriodStats(
 // ---------------------------------------------------------------------------
 
 class MainActivity : ComponentActivity() {
+    private val notifPermLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Evening reminder at 23:30
+        Reminder.ensureChannel(this)
+        Reminder.schedule(this)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
         setContent {
             DiarioTheme {
                 Surface(
@@ -217,6 +245,7 @@ fun DiaryApp() {
     var editingKey by remember { mutableStateOf<String?>(null) }
     var filter by remember { mutableStateOf<FilterType?>(null) }
     var showStats by remember { mutableStateOf(false) }
+    var showHeatmap by remember { mutableStateOf(false) }
 
     val counts by remember {
         derivedStateOf {
@@ -261,6 +290,7 @@ fun DiaryApp() {
                     data.clear()
                     data.putAll(restored)
                     store.save(data)
+                    DiaryWidgetProvider.refresh(context)
                     Toast.makeText(context, "Dati ripristinati (${restored.size} giorni)", Toast.LENGTH_SHORT).show()
                 }.onFailure {
                     Toast.makeText(context, "File di backup non valido", Toast.LENGTH_SHORT).show()
@@ -291,11 +321,16 @@ fun DiaryApp() {
         Column(Modifier.padding(pad).fillMaxSize()) {
             StatsRow(counts) { filter = it }
             Legend()
-            FilledTonalButton(
-                onClick = { showStats = true },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("📊  Statistiche & serie")
+                FilledTonalButton(onClick = { showStats = true }, modifier = Modifier.weight(1f)) {
+                    Text("📊 Statistiche")
+                }
+                FilledTonalButton(onClick = { showHeatmap = true }, modifier = Modifier.weight(1f)) {
+                    Text("🗓️ Anno")
+                }
             }
             LazyColumn(
                 state = listState,
@@ -321,11 +356,13 @@ fun DiaryApp() {
             onConfirm = { rec ->
                 if (rec.isEmpty) data.remove(key) else data[key] = rec
                 store.save(data)
+                DiaryWidgetProvider.refresh(context)
                 editingKey = null
             },
             onClear = {
                 data.remove(key)
                 store.save(data)
+                DiaryWidgetProvider.refresh(context)
                 editingKey = null
             },
             onDismiss = { editingKey = null }
@@ -338,6 +375,14 @@ fun DiaryApp() {
 
     if (showStats) {
         StatsScreen(data = data, onClose = { showStats = false })
+    }
+
+    if (showHeatmap) {
+        HeatmapScreen(
+            data = data,
+            onClose = { showHeatmap = false },
+            onEditDay = { key -> showHeatmap = false; editingKey = key }
+        )
     }
 }
 
@@ -517,6 +562,8 @@ private fun EditDialog(
 ) {
     var alcohol by remember { mutableStateOf(record.alcohol) }
     var activity by remember { mutableStateOf(record.activity) }
+    var kmText by remember { mutableStateOf(record.distanceKm?.let { fmtKm(it) } ?: "") }
+    var minText by remember { mutableStateOf(record.durationMin?.toString() ?: "") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -549,10 +596,39 @@ private fun EditDialog(
                         activity = if (activity == "rest") null else "rest"
                     }
                 }
+
+                // Distance/duration only make sense for run or walk.
+                if (activity == "run" || activity == "walk") {
+                    Spacer(Modifier.height(4.dp))
+                    SectionLabel("DISTANZA E DURATA")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = kmText,
+                            onValueChange = { kmText = it.filter { c -> c.isDigit() || c == '.' || c == ',' } },
+                            label = { Text("km") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = minText,
+                            onValueChange = { minText = it.filter { c -> c.isDigit() } },
+                            label = { Text("minuti") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(DayRecord(alcohol, activity)) }) { Text("Fatto") }
+            TextButton(onClick = {
+                val withMetrics = activity == "run" || activity == "walk"
+                val km = if (withMetrics) kmText.replace(",", ".").toDoubleOrNull()?.takeIf { it > 0 } else null
+                val min = if (withMetrics) minText.toIntOrNull()?.takeIf { it > 0 } else null
+                onConfirm(DayRecord(alcohol, activity, km, min))
+            }) { Text("Fatto") }
         },
         dismissButton = {
             TextButton(onClick = onClear) { Text("Svuota") }
@@ -586,6 +662,121 @@ private fun ChoiceChip(label: String, selected: Boolean, accent: Color, onClick:
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+@Composable
+private fun HeatmapScreen(
+    data: SnapshotStateMap<String, DayRecord>,
+    onClose: () -> Unit,
+    onEditDay: (String) -> Unit
+) {
+    var mode by remember { mutableStateOf(0) } // 0 = alcool, 1 = attività
+    val gutter = 30.dp
+
+    val jan1 = LocalDate.of(YEAR, 1, 1)
+    val dec31 = LocalDate.of(YEAR, 12, 31)
+    val gridStart = jan1.minusDays(((jan1.dayOfWeek.value + 6) % 7).toLong())
+    val gridEnd = dec31.plusDays(((7 - dec31.dayOfWeek.value) % 7).toLong())
+    val weeks = remember { weekStarts(gridStart, gridEnd) }
+
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onClose) { Text("‹ Indietro") }
+                    Spacer(Modifier.width(4.dp))
+                    Text("🗓️ Anno $YEAR", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                }
+                Row(
+                    Modifier.padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(selected = mode == 0, onClick = { mode = 0 }, label = { Text("Alcool") })
+                    FilterChip(selected = mode == 1, onClick = { mode = 1 }, label = { Text("Attività") })
+                }
+                HeatmapLegend(mode)
+                // Day-of-week header aligned with the grid (left month gutter first).
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)) {
+                    Spacer(Modifier.width(gutter))
+                    DOW.forEach {
+                        Text(it, Modifier.weight(1f), textAlign = TextAlign.Center, fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                LazyColumn(
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    items(weeks.size) { wi ->
+                        val monday = weeks[wi]
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            val label = monthLabelForWeek(monday)
+                            Box(Modifier.width(gutter)) {
+                                if (label != null) {
+                                    Text(label, fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            for (i in 0..6) {
+                                val date = monday.plusDays(i.toLong())
+                                val inYear = date.year == YEAR
+                                val bg = cellColor(if (inYear) data[keyOfDate(date)] else null, inYear, mode)
+                                Box(
+                                    Modifier.weight(1f).padding(1.dp).aspectRatio(1f)
+                                        .clip(RoundedCornerShape(3.dp))
+                                        .background(bg)
+                                        .clickable(enabled = inYear) { onEditDay(keyOfDate(date)) }
+                                )
+                            }
+                        }
+                    }
+                    item { Spacer(Modifier.height(12.dp)) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeatmapLegend(mode: Int) {
+    FlowRow(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        if (mode == 0) {
+            Swatch(CWater, "Senza alcool")
+            Swatch(CAlcohol, "Alcool")
+        } else {
+            Swatch(CRun, "Corsa")
+            Swatch(CWalk, "Camminata")
+            Swatch(CRest, "Riposo")
+        }
+        Swatch(MaterialTheme.colorScheme.surfaceVariant, "Non segnato")
+    }
+}
+
+@Composable
+private fun Swatch(color: Color, label: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box(Modifier.size(12.dp).clip(RoundedCornerShape(3.dp)).background(color))
+        Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun cellColor(rec: DayRecord?, inYear: Boolean, mode: Int): Color {
+    if (!inYear) return Color.Transparent
+    val empty = MaterialTheme.colorScheme.surfaceVariant
+    if (rec == null) return empty
+    return if (mode == 0) {
+        when (rec.alcohol) { "no" -> CWater; "yes" -> CAlcohol; else -> empty }
+    } else {
+        when (rec.activity) { "run" -> CRun; "walk" -> CWalk; "rest" -> CRest; else -> empty }
+    }
+}
 
 @Composable
 private fun StatsScreen(
@@ -690,9 +881,19 @@ private fun PeriodCard(s: PeriodStats) {
                 MiniLegend("🚶", s.walk)
                 MiniLegend("😴", s.rest)
             }
+            if (s.totalKm > 0.0 || s.totalMin > 0) {
+                Text(
+                    "📏 ${fmtKm(s.totalKm)} km   ⏱ ${s.totalMin} min",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
+
+private fun fmtKm(km: Double): String =
+    if (km == km.toLong().toDouble()) km.toLong().toString() else "%.1f".format(km)
 
 @Composable
 private fun MiniLegend(emoji: String, n: Int) {
@@ -791,6 +992,11 @@ private fun describe(rec: DayRecord): String {
         "walk" -> parts.add("🚶 Camminata")
         "rest" -> parts.add("😴 Riposo")
     }
+    val metrics = buildList {
+        rec.distanceKm?.let { if (it > 0) add("${fmtKm(it)} km") }
+        rec.durationMin?.let { if (it > 0) add("$it min") }
+    }
+    if (metrics.isNotEmpty()) parts.add("(${metrics.joinToString(", ")})")
     return if (parts.isEmpty()) "—" else parts.joinToString("    ")
 }
 
@@ -804,7 +1010,7 @@ private val MONTHS_ABBR = arrayOf(
 
 /** Serie di giorni consecutivi senza alcool (alcohol == "no"). Un giorno con
  *  alcool o non registrato interrompe la serie. */
-private fun alcoholFreeStreaks(data: Map<String, DayRecord>): Streaks {
+internal fun alcoholFreeStreaks(data: Map<String, DayRecord>): Streaks {
     val cleanDates = data.entries
         .filter { it.value.alcohol == "no" }
         .map { LocalDate.parse(it.key) }
@@ -827,11 +1033,14 @@ private fun alcoholFreeStreaks(data: Map<String, DayRecord>): Streaks {
 
 private fun statsFrom(label: String, recs: Collection<DayRecord>): PeriodStats {
     var ay = 0; var an = 0; var r = 0; var w = 0; var rest = 0
+    var km = 0.0; var min = 0
     recs.forEach {
         when (it.alcohol) { "yes" -> ay++; "no" -> an++ }
         when (it.activity) { "run" -> r++; "walk" -> w++; "rest" -> rest++ }
+        km += it.distanceKm ?: 0.0
+        min += it.durationMin ?: 0
     }
-    return PeriodStats(label, recs.size, ay, an, r, w, rest)
+    return PeriodStats(label, recs.size, ay, an, r, w, rest, km, min)
 }
 
 private fun monthlyStats(data: Map<String, DayRecord>): List<PeriodStats> {
@@ -868,6 +1077,28 @@ private fun labelForFull(key: String): String {
 
 private fun keyOf(month: Int, day: Int): String =
     "%04d-%02d-%02d".format(YEAR, month, day)
+
+private fun keyOfDate(d: LocalDate): String =
+    "%04d-%02d-%02d".format(d.year, d.monthValue, d.dayOfMonth)
+
+private fun weekStarts(start: LocalDate, end: LocalDate): List<LocalDate> {
+    val list = ArrayList<LocalDate>()
+    var d = start
+    while (!d.isAfter(end)) {
+        list.add(d)
+        d = d.plusDays(7)
+    }
+    return list
+}
+
+/** Etichetta mese per la riga-settimana che contiene il 1° del mese. */
+private fun monthLabelForWeek(monday: LocalDate): String? {
+    for (i in 0..6) {
+        val d = monday.plusDays(i.toLong())
+        if (d.year == YEAR && d.dayOfMonth == 1) return MONTHS_ABBR[d.monthValue - 1]
+    }
+    return null
+}
 
 private fun labelFor(key: String): String {
     val parts = key.split("-")
