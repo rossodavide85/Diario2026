@@ -64,6 +64,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -139,6 +141,22 @@ private val DOW = listOf("Lu", "Ma", "Me", "Gi", "Ve", "Sa", "Do")
 
 data class Counts(val alcoholYes: Int, val alcoholNo: Int, val run: Int, val walk: Int, val rest: Int)
 
+private enum class FilterType(val label: String, val emoji: String, val color: Color) {
+    ALCOHOL_YES("Alcool sì", "🍺", CAlcohol),
+    ALCOHOL_NO("Alcool no", "💧", CWater),
+    RUN("Corse", "🏃", CRun),
+    WALK("Camminate", "🚶", CWalk),
+    REST("Riposi", "😴", CRest);
+
+    fun matches(rec: DayRecord): Boolean = when (this) {
+        ALCOHOL_YES -> rec.alcohol == "yes"
+        ALCOHOL_NO -> rec.alcohol == "no"
+        RUN -> rec.activity == "run"
+        WALK -> rec.activity == "walk"
+        REST -> rec.activity == "rest"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Activity
 // ---------------------------------------------------------------------------
@@ -181,6 +199,7 @@ fun DiaryApp() {
     val data = remember { mutableStateMapOf<String, DayRecord>().apply { putAll(store.load()) } }
 
     var editingKey by remember { mutableStateOf<String?>(null) }
+    var filter by remember { mutableStateOf<FilterType?>(null) }
 
     val counts by remember {
         derivedStateOf {
@@ -253,7 +272,7 @@ fun DiaryApp() {
         }
     ) { pad ->
         Column(Modifier.padding(pad).fillMaxSize()) {
-            StatsRow(counts)
+            StatsRow(counts) { filter = it }
             Legend()
             LazyColumn(
                 state = listState,
@@ -289,34 +308,38 @@ fun DiaryApp() {
             onDismiss = { editingKey = null }
         )
     }
+
+    filter?.let { f ->
+        FilterScreen(filter = f, data = data, onClose = { filter = null })
+    }
 }
 
 @Composable
-private fun StatsRow(c: Counts) {
+private fun StatsRow(c: Counts, onFilter: (FilterType) -> Unit) {
     FlowRow(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        StatCard(c.alcoholYes, "Alcool sì", "🍺", CAlcohol)
-        StatCard(c.alcoholNo, "Alcool no", "💧", CWater)
-        StatCard(c.run, "Corse", "🏃", CRun)
-        StatCard(c.walk, "Camminate", "🚶", CWalk)
-        StatCard(c.rest, "Riposi", "😴", CRest)
+        StatCard(c.alcoholYes, FilterType.ALCOHOL_YES, onFilter)
+        StatCard(c.alcoholNo, FilterType.ALCOHOL_NO, onFilter)
+        StatCard(c.run, FilterType.RUN, onFilter)
+        StatCard(c.walk, FilterType.WALK, onFilter)
+        StatCard(c.rest, FilterType.REST, onFilter)
     }
 }
 
 @Composable
-private fun StatCard(n: Int, label: String, emoji: String, accent: Color) {
+private fun StatCard(n: Int, filter: FilterType, onFilter: (FilterType) -> Unit) {
     Card(
-        modifier = Modifier.width(108.dp),
+        modifier = Modifier.width(108.dp).clickable { onFilter(filter) },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Row(Modifier.fillMaxWidth()) {
-            Box(Modifier.width(4.dp).height(64.dp).background(accent))
+            Box(Modifier.width(4.dp).height(64.dp).background(filter.color))
             Column(Modifier.padding(10.dp)) {
-                Text("$n", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = accent)
-                Text("$emoji $label", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("$n", fontSize = 24.sp, fontWeight = FontWeight.ExtraBold, color = filter.color)
+                Text("${filter.emoji} ${filter.label}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -413,36 +436,37 @@ private fun DayCell(day: Int, rec: DayRecord?, isToday: Boolean, onClick: () -> 
     val withBorder = if (isToday)
         base.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp)) else base
 
-    Box(modifier = withBorder.clickable { onClick() }) {
-        // Day number stays in the usual top corner.
+    Column(
+        modifier = withBorder.clickable { onClick() },
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Day number pinned at the top.
         Text(
             "$day",
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 4.dp),
+            modifier = Modifier.padding(top = 3.dp),
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurface,
             fontWeight = FontWeight.SemiBold
         )
-        // Icons per the rules: alcohol-yes and run/walk only. No icon for alcohol-no or rest.
-        val icons = buildString {
-            if (rec?.alcohol == "yes") append("🍺")
-            when (rec?.activity) {
-                "run" -> append("🏃")
-                "walk" -> append("🚶")
+        // Icon centered in the remaining space below the number (no overlap).
+        Box(
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            contentAlignment = Alignment.Center
+        ) {
+            // Icons per the rules: alcohol-yes and run/walk only. No icon for alcohol-no or rest.
+            val icons = buildString {
+                if (rec?.alcohol == "yes") append("🍺")
+                when (rec?.activity) {
+                    "run" -> append("🏃")
+                    "walk" -> append("🚶")
+                }
             }
-        }
-        if (icons.isNotEmpty()) {
-            // Centered vertically in the cell.
-            Text(
-                icons,
-                modifier = Modifier.align(Alignment.Center).padding(top = 3.dp),
-                fontSize = 14.sp
-            )
-        } else if (rec?.activity == "rest") {
-            // logged rest day: a small centered dot, no icon
-            Box(
-                Modifier.align(Alignment.Center).padding(top = 3.dp)
-                    .size(7.dp).clip(CircleShape).background(CRest)
-            )
+            if (icons.isNotEmpty()) {
+                Text(icons, fontSize = 13.sp)
+            } else if (rec?.activity == "rest") {
+                // logged rest day: a small dot, no icon
+                Box(Modifier.size(7.dp).clip(CircleShape).background(CRest))
+            }
         }
     }
 }
@@ -526,6 +550,94 @@ private fun ChoiceChip(label: String, selected: Boolean, accent: Color, onClick:
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+@Composable
+private fun FilterScreen(
+    filter: FilterType,
+    data: SnapshotStateMap<String, DayRecord>,
+    onClose: () -> Unit
+) {
+    val keys = data.entries.filter { filter.matches(it.value) }.map { it.key }.sorted()
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onClose) { Text("‹ Indietro") }
+                    Spacer(Modifier.width(4.dp))
+                    Column {
+                        Text(
+                            "${filter.emoji} ${filter.label}",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = filter.color
+                        )
+                        Text(
+                            if (keys.size == 1) "1 giorno" else "${keys.size} giorni",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                if (keys.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("Nessun giorno registrato", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    LazyColumn(
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(keys.size) { i ->
+                            val key = keys[i]
+                            val rec = data[key]!!
+                            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                                Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
+                                    Text(
+                                        labelForFull(key),
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        describe(rec),
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun describe(rec: DayRecord): String {
+    val parts = mutableListOf<String>()
+    when (rec.alcohol) {
+        "yes" -> parts.add("🍺 Alcool")
+        "no" -> parts.add("💧 Niente alcool")
+    }
+    when (rec.activity) {
+        "run" -> parts.add("🏃 Corsa")
+        "walk" -> parts.add("🚶 Camminata")
+        "rest" -> parts.add("😴 Riposo")
+    }
+    return if (parts.isEmpty()) "—" else parts.joinToString("    ")
+}
+
+private val WEEKDAYS = arrayOf(
+    "Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"
+)
+
+private fun labelForFull(key: String): String {
+    val d = LocalDate.parse(key)
+    return "${WEEKDAYS[d.dayOfWeek.value - 1]} ${d.dayOfMonth} ${MONTHS[d.monthValue - 1]}"
+}
 
 private fun keyOf(month: Int, day: Int): String =
     "%04d-%02d-%02d".format(YEAR, month, day)
