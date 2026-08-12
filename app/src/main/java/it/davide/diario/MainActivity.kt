@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -43,6 +44,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
@@ -96,6 +98,9 @@ import kotlin.math.roundToInt
 // ---------------------------------------------------------------------------
 
 const val YEAR = 2026
+
+// Your maximum heart rate, used to compute HR training zones (Z1–Z5).
+const val MAX_HR = 188
 
 @Serializable
 data class DayRecord(
@@ -261,6 +266,20 @@ fun DiaryApp() {
     var filter by remember { mutableStateOf<FilterType?>(null) }
     var showStats by remember { mutableStateOf(false) }
     var showHeatmap by remember { mutableStateOf(false) }
+    var detailKey by remember { mutableStateOf<String?>(null) }
+    var detail by remember { mutableStateOf<ActivityDetail?>(null) }
+    var detailLoading by remember { mutableStateOf(false) }
+
+    LaunchedEffect(detailKey) {
+        val k = detailKey
+        if (k != null) {
+            detailLoading = true
+            detail = runCatching { HealthImport.readActivityDetail(context, k, MAX_HR) }.getOrNull()
+            detailLoading = false
+        } else {
+            detail = null
+        }
+    }
 
     val counts by remember {
         derivedStateOf {
@@ -443,6 +462,9 @@ fun DiaryApp() {
                 DiaryWidgetProvider.refresh(context)
                 editingKey = null
             },
+            onShowDetail = if (data[key]?.activity == "run" || data[key]?.activity == "walk") {
+                { detailKey = key; editingKey = null }
+            } else null,
             onDismiss = { editingKey = null }
         )
     }
@@ -460,6 +482,15 @@ fun DiaryApp() {
             data = data,
             onClose = { showHeatmap = false },
             onEditDay = { key -> showHeatmap = false; editingKey = key }
+        )
+    }
+
+    detailKey?.let { k ->
+        ActivityDetailScreen(
+            dateLabel = labelForFull(k),
+            loading = detailLoading,
+            detail = detail,
+            onClose = { detailKey = null }
         )
     }
 }
@@ -636,6 +667,7 @@ private fun EditDialog(
     record: DayRecord,
     onConfirm: (DayRecord) -> Unit,
     onClear: () -> Unit,
+    onShowDetail: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     var alcohol by remember { mutableStateOf(record.alcohol) }
@@ -649,6 +681,12 @@ private fun EditDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(dateLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+
+                if (onShowDetail != null) {
+                    TextButton(onClick = onShowDetail, contentPadding = PaddingValues(vertical = 0.dp)) {
+                        Text("📋 Dettaglio attività  ▸")
+                    }
+                }
 
                 Spacer(Modifier.height(4.dp))
                 SectionLabel("ALCOOL")
@@ -870,6 +908,219 @@ private fun cellColor(rec: DayRecord?, inYear: Boolean, mode: Int): Color {
         when (rec.activity) { "run" -> CRun; "walk" -> CWalk; "rest" -> CRest; else -> empty }
     }
 }
+
+@Composable
+private fun ActivityDetailScreen(
+    dateLabel: String,
+    loading: Boolean,
+    detail: ActivityDetail?,
+    onClose: () -> Unit
+) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(onClick = onClose) { Text("‹ Indietro") }
+                    Spacer(Modifier.width(4.dp))
+                    Text("Dettaglio attività", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                }
+                when {
+                    loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                    detail == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            "Nessuna attività Garmin per questa giornata.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    else -> ActivityDetailBody(dateLabel, detail)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ActivityDetailBody(dateLabel: String, dt: ActivityDetail) {
+    val avgSpeed = if (dt.durationSec > 0) dt.km / (dt.durationSec / 3600.0) else 0.0
+    val avgPaceSec = if (dt.km > 0) (dt.durationSec / dt.km).roundToInt() else 0
+    LazyColumn(
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                    Text(
+                        "${if (dt.activity == "run") "🏃 Corsa" else "🚶 Camminata"} · $dateLabel",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                        Column {
+                            Text(fmtKm(dt.km), fontSize = 30.sp, fontWeight = FontWeight.ExtraBold, color = CRun)
+                            Text("km", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Column {
+                            Text(fmtHms(dt.durationSec), fontSize = 30.sp, fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.onSurface)
+                            Text("tempo", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                FlowRow(
+                    Modifier.fillMaxWidth().padding(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    if (avgPaceSec > 0) StatCell("Passo medio", fmtPaceSec(avgPaceSec), CWater)
+                    dt.bestPaceSecPerKm?.let { StatCell("Passo migliore", fmtPaceSec(it), CWater) }
+                    StatCell("Vel. media", "%.1f km/h".format(avgSpeed), CWalk)
+                    dt.maxSpeedKmh?.let { StatCell("Vel. max", "%.1f km/h".format(it), CWalk) }
+                    dt.avgHr?.let { StatCell("FC media", "$it bpm", CHeart) }
+                    dt.maxHr?.let { StatCell("FC max", "$it bpm", CHeart) }
+                    dt.minHr?.let { StatCell("FC min", "$it bpm", CHeart) }
+                    if (dt.calories > 0) StatCell("Calorie", "${dt.calories} kcal", CAlcohol)
+                    if (dt.elevationM > 0) StatCell("Dislivello", "${dt.elevationM} m", CElev)
+                }
+            }
+        }
+        if (dt.zonesSec.any { it > 0 }) {
+            item { SectionTitle("Zone di frequenza cardiaca") }
+            item { HrZones(dt.zonesSec) }
+        }
+        if (dt.hrSeries.isNotEmpty()) {
+            item { SectionTitle("Frequenza cardiaca nel tempo") }
+            item { MiniBars(dt.hrSeries, CHeart) }
+        }
+        if (dt.splits.isNotEmpty()) {
+            item { SectionTitle("Tempi per tratto") }
+            item { SplitsTable(dt.splits) }
+        }
+        item { Spacer(Modifier.height(12.dp)) }
+    }
+}
+
+@Composable
+private fun StatCell(label: String, value: String, color: Color) {
+    Column(Modifier.width(104.dp)) {
+        Text(value, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = color)
+        Text(label, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun HrZones(zonesSec: List<Int>) {
+    val colors = listOf(CWater, CWalk, CAlcohol, CRun, CHeart)
+    val names = listOf("Z1", "Z2", "Z3", "Z4", "Z5")
+    val maxZ = (zonesSec.maxOrNull() ?: 0).coerceAtLeast(1)
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (i in 0..4) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(names[i], fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = colors[i], modifier = Modifier.width(24.dp))
+                    Box(
+                        Modifier.weight(1f).height(16.dp).clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                    ) {
+                        Box(
+                            Modifier.fillMaxHeight()
+                                .fillMaxWidth(zonesSec[i].toFloat() / maxZ)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(colors[i])
+                        )
+                    }
+                    Text(
+                        fmtHms(zonesSec[i]),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.width(52.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MiniBars(values: List<Int>, color: Color) {
+    if (values.isEmpty()) return
+    val maxV = (values.maxOrNull() ?: 1).coerceAtLeast(1)
+    val minV = values.minOrNull() ?: 0
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            Row(
+                Modifier.fillMaxWidth().height(80.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                values.forEach { v ->
+                    val frac = if (maxV > minV) (v - minV).toFloat() / (maxV - minV) else 1f
+                    Box(
+                        Modifier.weight(1f)
+                            .height((6f + frac * 70f).dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(color)
+                    )
+                }
+            }
+            Spacer(Modifier.height(4.dp))
+            Text("min $minV · max $maxV bpm", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun SplitsTable(splits: List<ActivitySplit>) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            Row(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
+                SplitCell("#", 0.5f, bold = true)
+                SplitCell("Tempo", 1f, bold = true)
+                SplitCell("km", 1f, bold = true)
+                SplitCell("Passo", 1f, bold = true)
+                SplitCell("FC", 0.8f, bold = true)
+            }
+            splits.forEach { sp ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                    SplitCell(sp.label, 0.5f)
+                    SplitCell(fmtHms(sp.seconds), 1f)
+                    SplitCell(fmtKm(sp.km), 1f)
+                    SplitCell(sp.paceText, 1f)
+                    SplitCell(sp.avgHr?.toString() ?: "—", 0.8f)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RowScope.SplitCell(text: String, weight: Float, bold: Boolean = false) {
+    Text(
+        text,
+        modifier = Modifier.weight(weight),
+        fontSize = 12.sp,
+        fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Normal,
+        color = if (bold) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+    )
+}
+
+private fun fmtHms(sec: Int): String {
+    val h = sec / 3600; val m = (sec % 3600) / 60; val s = sec % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+}
+
+private fun fmtPaceSec(secPerKm: Int): String =
+    "%d'%02d\"/km".format(secPerKm / 60, secPerKm % 60)
 
 @Composable
 private fun StatsScreen(
