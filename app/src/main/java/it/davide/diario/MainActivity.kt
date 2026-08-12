@@ -60,9 +60,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.runtime.LaunchedEffect
+import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.PermissionController
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -299,6 +303,59 @@ fun DiaryApp() {
         }
     }
 
+    // Garmin import via Health Connect (local, no credentials, no server).
+    val scope = rememberCoroutineScope()
+
+    fun runHealthImport() {
+        scope.launch {
+            val n = runCatching {
+                val imported = HealthImport.readActivities(context)
+                imported.forEach { (key, imp) ->
+                    val existing = data[key] ?: DayRecord()
+                    data[key] = existing.copy(
+                        activity = imp.activity,
+                        distanceKm = imp.km.takeIf { it > 0 },
+                        durationMin = imp.minutes.takeIf { it > 0 }
+                    )
+                }
+                store.save(data)
+                DiaryWidgetProvider.refresh(context)
+                imported.size
+            }.getOrElse { -1 }
+            Toast.makeText(
+                context,
+                if (n >= 0) "Importate $n attività da Garmin" else "Errore lettura Health Connect",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    val healthPermLauncher = rememberLauncherForActivityResult(
+        PermissionController.createRequestPermissionResultContract()
+    ) {
+        scope.launch {
+            if (HealthImport.hasPermissions(context)) {
+                runHealthImport()
+            } else {
+                Toast.makeText(context, "Permesso Health Connect negato", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    fun importFromGarmin() {
+        if (!HealthImport.isAvailable(context)) {
+            Toast.makeText(context, "Health Connect non disponibile su questo telefono", Toast.LENGTH_LONG).show()
+            return
+        }
+        scope.launch {
+            if (HealthImport.hasPermissions(context)) {
+                runHealthImport()
+            } else {
+                healthPermLauncher.launch(HealthImport.PERMISSIONS)
+            }
+        }
+    }
+
     val listState = rememberLazyListState()
     // Open on July (index 6) at first launch.
     LaunchedEffect(Unit) { runCatching { listState.scrollToItem(6) } }
@@ -331,6 +388,12 @@ fun DiaryApp() {
                 FilledTonalButton(onClick = { showHeatmap = true }, modifier = Modifier.weight(1f)) {
                     Text("🗓️ Anno")
                 }
+            }
+            FilledTonalButton(
+                onClick = { importFromGarmin() },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 4.dp)
+            ) {
+                Text("⌚  Importa attività da Garmin")
             }
             LazyColumn(
                 state = listState,
