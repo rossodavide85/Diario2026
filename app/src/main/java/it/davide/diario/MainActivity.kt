@@ -87,6 +87,7 @@ import kotlinx.serialization.json.Json
 import java.io.File
 import java.time.LocalDate
 import java.time.YearMonth
+import kotlin.math.roundToInt
 
 // ---------------------------------------------------------------------------
 // Data
@@ -99,7 +100,9 @@ data class DayRecord(
     val alcohol: String? = null,
     val activity: String? = null,
     val distanceKm: Double? = null,
-    val durationMin: Int? = null
+    val durationMin: Int? = null,
+    val calories: Int? = null,
+    val avgHr: Int? = null
 ) {
     val isEmpty: Boolean get() = alcohol == null && activity == null
 }
@@ -188,7 +191,9 @@ data class PeriodStats(
     val walk: Int,
     val rest: Int,
     val totalKm: Double,
-    val totalMin: Int
+    val totalMin: Int,
+    val totalCalories: Int,
+    val avgHr: Int?
 )
 
 // ---------------------------------------------------------------------------
@@ -306,25 +311,27 @@ fun DiaryApp() {
     // Garmin import via Health Connect (local, no credentials, no server).
     val scope = rememberCoroutineScope()
 
-    fun runHealthImport() {
-        scope.launch {
-            val n = runCatching {
-                val imported = HealthImport.readActivities(context)
-                imported.forEach { (key, imp) ->
-                    val existing = data[key] ?: DayRecord()
-                    data[key] = existing.copy(
-                        activity = imp.activity,
-                        distanceKm = imp.km.takeIf { it > 0 },
-                        durationMin = imp.minutes.takeIf { it > 0 }
-                    )
-                }
-                store.save(data)
-                DiaryWidgetProvider.refresh(context)
-                imported.size
-            }.getOrElse { -1 }
+    suspend fun performImport(silent: Boolean) {
+        val n = runCatching {
+            val imported = HealthImport.readActivities(context)
+            imported.forEach { (key, imp) ->
+                val existing = data[key] ?: DayRecord()
+                data[key] = existing.copy(
+                    activity = imp.activity,
+                    distanceKm = imp.km.takeIf { it > 0 },
+                    durationMin = imp.minutes.takeIf { it > 0 },
+                    calories = imp.calories.takeIf { it > 0 },
+                    avgHr = imp.avgHr
+                )
+            }
+            store.save(data)
+            DiaryWidgetProvider.refresh(context)
+            imported.size
+        }.getOrElse { -1 }
+        if (!silent) {
             Toast.makeText(
                 context,
-                if (n >= 0) "Importate $n attività da Garmin" else "Errore lettura Health Connect",
+                if (n >= 0) "Sincronizzate $n attività da Garmin" else "Errore lettura Health Connect",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -334,11 +341,8 @@ fun DiaryApp() {
         PermissionController.createRequestPermissionResultContract()
     ) {
         scope.launch {
-            if (HealthImport.hasPermissions(context)) {
-                runHealthImport()
-            } else {
-                Toast.makeText(context, "Permesso Health Connect negato", Toast.LENGTH_SHORT).show()
-            }
+            if (HealthImport.hasPermissions(context)) performImport(false)
+            else Toast.makeText(context, "Permesso Health Connect negato", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -348,11 +352,15 @@ fun DiaryApp() {
             return
         }
         scope.launch {
-            if (HealthImport.hasPermissions(context)) {
-                runHealthImport()
-            } else {
-                healthPermLauncher.launch(HealthImport.PERMISSIONS)
-            }
+            if (HealthImport.hasAllPermissions(context)) performImport(false)
+            else healthPermLauncher.launch(HealthImport.PERMISSIONS)
+        }
+    }
+
+    // Auto-sync on every app open (silent), if already authorised.
+    LaunchedEffect(Unit) {
+        if (HealthImport.isAvailable(context) && HealthImport.hasPermissions(context)) {
+            performImport(silent = true)
         }
     }
 
@@ -393,7 +401,7 @@ fun DiaryApp() {
                 onClick = { importFromGarmin() },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 4.dp)
             ) {
-                Text("⌚  Importa attività da Garmin")
+                Text("⌚  Sincronizza Garmin ora")
             }
             LazyColumn(
                 state = listState,
@@ -683,6 +691,20 @@ private fun EditDialog(
                         )
                     }
                 }
+
+                // Read-only extras imported from Garmin (calories / heart rate / pace).
+                val garmin = buildList {
+                    record.calories?.let { add("🔥 $it kcal") }
+                    record.avgHr?.let { add("❤️ $it bpm") }
+                    fmtPace(record.distanceKm ?: 0.0, record.durationMin ?: 0)?.let { add("⏩ $it") }
+                }
+                if (garmin.isNotEmpty()) {
+                    Text(
+                        "Da Garmin:  ${garmin.joinToString("   ")}",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         },
         confirmButton = {
@@ -944,9 +966,16 @@ private fun PeriodCard(s: PeriodStats) {
                 MiniLegend("🚶", s.walk)
                 MiniLegend("😴", s.rest)
             }
-            if (s.totalKm > 0.0 || s.totalMin > 0) {
+            val metrics = buildList {
+                if (s.totalKm > 0.0) add("📏 ${fmtKm(s.totalKm)} km")
+                if (s.totalMin > 0) add("⏱ ${s.totalMin} min")
+                fmtPace(s.totalKm, s.totalMin)?.let { add("⏩ $it") }
+                if (s.totalCalories > 0) add("🔥 ${s.totalCalories} kcal")
+                s.avgHr?.let { add("❤️ $it bpm") }
+            }
+            if (metrics.isNotEmpty()) {
                 Text(
-                    "📏 ${fmtKm(s.totalKm)} km   ⏱ ${s.totalMin} min",
+                    metrics.joinToString("    "),
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -957,6 +986,16 @@ private fun PeriodCard(s: PeriodStats) {
 
 private fun fmtKm(km: Double): String =
     if (km == km.toLong().toDouble()) km.toLong().toString() else "%.1f".format(km)
+
+/** Average pace as m'ss"/km, or null if not computable. */
+private fun fmtPace(km: Double, minutes: Int): String? {
+    if (km <= 0.0 || minutes <= 0) return null
+    val paceMinPerKm = minutes / km
+    var m = paceMinPerKm.toInt()
+    var s = ((paceMinPerKm - m) * 60).roundToInt()
+    if (s == 60) { m += 1; s = 0 }
+    return "%d'%02d\"/km".format(m, s)
+}
 
 @Composable
 private fun MiniLegend(emoji: String, n: Int) {
@@ -1058,6 +1097,9 @@ private fun describe(rec: DayRecord): String {
     val metrics = buildList {
         rec.distanceKm?.let { if (it > 0) add("${fmtKm(it)} km") }
         rec.durationMin?.let { if (it > 0) add("$it min") }
+        fmtPace(rec.distanceKm ?: 0.0, rec.durationMin ?: 0)?.let { add(it) }
+        rec.calories?.let { if (it > 0) add("$it kcal") }
+        rec.avgHr?.let { add("$it bpm") }
     }
     if (metrics.isNotEmpty()) parts.add("(${metrics.joinToString(", ")})")
     return if (parts.isEmpty()) "—" else parts.joinToString("    ")
@@ -1096,14 +1138,20 @@ internal fun alcoholFreeStreaks(data: Map<String, DayRecord>): Streaks {
 
 private fun statsFrom(label: String, recs: Collection<DayRecord>): PeriodStats {
     var ay = 0; var an = 0; var r = 0; var w = 0; var rest = 0
-    var km = 0.0; var min = 0
+    var km = 0.0; var min = 0; var kcal = 0
+    var hrWeighted = 0.0; var hrMin = 0
     recs.forEach {
         when (it.alcohol) { "yes" -> ay++; "no" -> an++ }
         when (it.activity) { "run" -> r++; "walk" -> w++; "rest" -> rest++ }
         km += it.distanceKm ?: 0.0
         min += it.durationMin ?: 0
+        kcal += it.calories ?: 0
+        val hr = it.avgHr
+        val dm = it.durationMin ?: 0
+        if (hr != null && dm > 0) { hrWeighted += hr.toDouble() * dm; hrMin += dm }
     }
-    return PeriodStats(label, recs.size, ay, an, r, w, rest, km, min)
+    val avgHr = if (hrMin > 0) (hrWeighted / hrMin).roundToInt() else null
+    return PeriodStats(label, recs.size, ay, an, r, w, rest, km, min, kcal, avgHr)
 }
 
 private fun monthlyStats(data: Map<String, DayRecord>): List<PeriodStats> {
