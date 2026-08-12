@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "it.davide.diario"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "it.davide.diario"
