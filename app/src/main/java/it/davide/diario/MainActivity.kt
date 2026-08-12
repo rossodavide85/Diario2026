@@ -723,6 +723,14 @@ private fun EditDialog(
                             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp)
                         ) { Text("+", fontSize = 20.sp) }
                     }
+                    Text(
+                        "1 unità ≈ 12 g di alcol:\n" +
+                            "🍷 vino 125 ml  ·  🍺 birra chiara 33 cl  ·  🍺 doppio malto ~20 cl\n" +
+                            "🥃 superalcolico 40 ml  ·  🍹 aperitivo 80 ml",
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
 
                 Spacer(Modifier.height(4.dp))
