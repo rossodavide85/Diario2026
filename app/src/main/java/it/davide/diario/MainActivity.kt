@@ -102,6 +102,12 @@ const val YEAR = 2026
 // Your maximum heart rate, used to compute HR training zones (Z1–Z5).
 const val MAX_HR = 188
 
+// Approx. calories per alcohol unit (~12 g ethanol × 7 kcal/g ≈ 84, rounded).
+const val KCAL_PER_ALCOHOL_UNIT = 90
+
+// Weekly goal: max number of days with alcohol.
+const val ALCOHOL_WEEKLY_GOAL = 2
+
 @Serializable
 data class DayRecord(
     val alcohol: String? = null,
@@ -110,7 +116,8 @@ data class DayRecord(
     val durationMin: Int? = null,
     val calories: Int? = null,
     val avgHr: Int? = null,
-    val elevationM: Int? = null
+    val elevationM: Int? = null,
+    val alcoholUnits: Int? = null
 ) {
     val isEmpty: Boolean get() = alcohol == null && activity == null
 }
@@ -204,7 +211,8 @@ data class PeriodStats(
     val totalMin: Int,
     val totalCalories: Int,
     val avgHr: Int?,
-    val totalElevation: Int
+    val totalElevation: Int,
+    val alcoholUnits: Int
 )
 
 // ---------------------------------------------------------------------------
@@ -671,6 +679,7 @@ private fun EditDialog(
     onDismiss: () -> Unit
 ) {
     var alcohol by remember { mutableStateOf(record.alcohol) }
+    var units by remember { mutableStateOf(record.alcoholUnits?.takeIf { it > 0 } ?: 1) }
     var activity by remember { mutableStateOf(record.activity) }
     var kmText by remember { mutableStateOf(record.distanceKm?.let { fmtKm(it) } ?: "") }
     var minText by remember { mutableStateOf(record.durationMin?.toString() ?: "") }
@@ -696,6 +705,23 @@ private fun EditDialog(
                     }
                     ChoiceChip("No", alcohol == "no", CWater) {
                         alcohol = if (alcohol == "no") null else "no"
+                    }
+                }
+                if (alcohol == "yes") {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("Unità:", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        TextButton(
+                            onClick = { if (units > 1) units-- },
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp)
+                        ) { Text("−", fontSize = 20.sp) }
+                        Text("$units", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = CAlcohol)
+                        TextButton(
+                            onClick = { if (units < 20) units++ },
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp)
+                        ) { Text("+", fontSize = 20.sp) }
                     }
                 }
 
@@ -758,7 +784,23 @@ private fun EditDialog(
                 val withMetrics = activity == "run" || activity == "walk"
                 val km = if (withMetrics) kmText.replace(",", ".").toDoubleOrNull()?.takeIf { it > 0 } else null
                 val min = if (withMetrics) minText.toIntOrNull()?.takeIf { it > 0 } else null
-                onConfirm(DayRecord(alcohol, activity, km, min))
+                val alcUnits = when (alcohol) {
+                    "yes" -> units.coerceAtLeast(1)
+                    "no" -> 0
+                    else -> null
+                }
+                onConfirm(
+                    record.copy(
+                        alcohol = alcohol,
+                        alcoholUnits = alcUnits,
+                        activity = activity,
+                        distanceKm = if (withMetrics) km else null,
+                        durationMin = if (withMetrics) min else null,
+                        calories = if (withMetrics) record.calories else null,
+                        avgHr = if (withMetrics) record.avgHr else null,
+                        elevationM = if (withMetrics) record.elevationM else null
+                    )
+                )
             }) { Text("Fatto") }
         },
         dismissButton = {
@@ -1143,6 +1185,9 @@ private fun StatsScreen(
         { "${it.elevationM}" })
     val anyTrend = kmPts.isNotEmpty() || pacePts.isNotEmpty() || hrPts.isNotEmpty() || elevPts.isNotEmpty()
 
+    val alcWeekPts = weeks.map { Triple(it.label.substringBefore(" –").trim(), it.alcoholYes.toFloat(), "${it.alcoholYes}") }
+    val showAlcChart = weeks.any { it.alcoholYes > 0 }
+
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize()) {
@@ -1159,6 +1204,10 @@ private fun StatsScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     item { StreakCard(streaks) }
+                    item { SectionTitle("Alcool") }
+                    item { AlcoholSummaryCard(data) }
+                    if (showAlcChart) item { TrendChart("Giorni con alcol / settimana", CAlcohol, alcWeekPts) }
+                    item { AlcoholInsightCard(data) }
                     if (anyTrend) item { SectionTitle("Andamento") }
                     if (kmPts.isNotEmpty()) item { TrendChart("Distanza (km)", CRun, kmPts) }
                     if (pacePts.isNotEmpty()) item { TrendChart("Passo (min/km)", CWater, pacePts) }
@@ -1209,6 +1258,69 @@ private fun TrendChart(title: String, color: Color, points: List<Triple<String, 
                         Text(date, fontSize = 9.sp, maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AlcoholSummaryCard(data: SnapshotStateMap<String, DayRecord>) {
+    val week = currentWeekAlcoholDays(data)
+    val goal = ALCOHOL_WEEKLY_GOAL
+    val sober = soberPercent(data)
+    val units = totalAlcoholUnits(data)
+    val kcal = units * KCAL_PER_ALCOHOL_UNIT
+    val overGoal = week > goal
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                "Questa settimana: $week/$goal giorni con alcol",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (overGoal) CRun else MaterialTheme.colorScheme.onSurface
+            )
+            Box(
+                Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+            ) {
+                Box(
+                    Modifier.fillMaxHeight()
+                        .fillMaxWidth((week.toFloat() / goal).coerceIn(0f, 1f))
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(if (overGoal) CRun else CWalk)
+                )
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                sober?.let { Text("🚱 $it% giorni sobri", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                if (units > 0) Text("🍺 $units unità", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (kcal > 0) Text("🔥 ~$kcal kcal da alcol", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AlcoholInsightCard(data: SnapshotStateMap<String, DayRecord>) {
+    val ins = alcoholActivityInsight(data)
+    if (!ins.hasData) return
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Alcol e prestazioni", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+            Text(
+                "Allenamenti nel giorno dopo aver bevuto vs dopo un giorno sobrio.",
+                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (ins.afterDrinkPace != null && ins.afterSoberPace != null) {
+                Text(
+                    "⏩ Passo — dopo alcol ${fmtPaceSec(ins.afterDrinkPace)} · sobrio ${fmtPaceSec(ins.afterSoberPace)}",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            if (ins.afterDrinkHr != null && ins.afterSoberHr != null) {
+                Text(
+                    "❤️ FC media — dopo alcol ${ins.afterDrinkHr} bpm · sobrio ${ins.afterSoberHr} bpm",
+                    fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurface
+                )
             }
         }
     }
@@ -1400,7 +1512,7 @@ private fun FilterScreen(
 private fun describe(rec: DayRecord): String {
     val parts = mutableListOf<String>()
     when (rec.alcohol) {
-        "yes" -> parts.add("🍺 Alcool")
+        "yes" -> parts.add("🍺 Alcool" + (rec.alcoholUnits?.takeIf { it > 0 }?.let { " ($it u.)" } ?: ""))
         "no" -> parts.add("💧 Niente alcool")
     }
     when (rec.activity) {
@@ -1451,6 +1563,61 @@ internal fun alcoholFreeStreaks(data: Map<String, DayRecord>): Streaks {
     return Streaks(current, longest)
 }
 
+private fun currentWeekAlcoholDays(data: Map<String, DayRecord>): Int {
+    val today = LocalDate.now()
+    val monday = today.minusDays(((today.dayOfWeek.value + 6) % 7).toLong())
+    val sunday = monday.plusDays(6)
+    return data.entries.count { e ->
+        val d = LocalDate.parse(e.key)
+        !d.isBefore(monday) && !d.isAfter(sunday) && e.value.alcohol == "yes"
+    }
+}
+
+private fun soberPercent(data: Map<String, DayRecord>): Int? {
+    var yes = 0; var no = 0
+    data.values.forEach { when (it.alcohol) { "yes" -> yes++; "no" -> no++ } }
+    val tot = yes + no
+    return if (tot == 0) null else no * 100 / tot
+}
+
+private fun totalAlcoholUnits(data: Map<String, DayRecord>): Int =
+    data.values.sumOf { it.alcoholUnits ?: 0 }
+
+data class AlcoholInsight(
+    val afterDrinkPace: Int?, val afterSoberPace: Int?,
+    val afterDrinkHr: Int?, val afterSoberHr: Int?,
+    val hasData: Boolean
+)
+
+/** Compares activity days by whether the PREVIOUS day had alcohol. */
+private fun alcoholActivityInsight(data: Map<String, DayRecord>): AlcoholInsight {
+    var dPaceSum = 0.0; var dPaceN = 0; var sPaceSum = 0.0; var sPaceN = 0
+    var dHrSum = 0; var dHrN = 0; var sHrSum = 0; var sHrN = 0
+    for ((key, rec) in data) {
+        val prev = LocalDate.parse(key).minusDays(1)
+        val prevKey = "%04d-%02d-%02d".format(prev.year, prev.monthValue, prev.dayOfMonth)
+        val prevAlc = data[prevKey]?.alcohol ?: continue
+        val afterDrink = prevAlc == "yes"
+        val km = rec.distanceKm ?: 0.0
+        val dm = rec.durationMin ?: 0
+        if (km > 0 && dm > 0) {
+            val pace = dm * 60.0 / km
+            if (afterDrink) { dPaceSum += pace; dPaceN++ } else { sPaceSum += pace; sPaceN++ }
+        }
+        rec.avgHr?.let {
+            if (afterDrink) { dHrSum += it; dHrN++ } else { sHrSum += it; sHrN++ }
+        }
+    }
+    val hasData = (dPaceN > 0 && sPaceN > 0) || (dHrN > 0 && sHrN > 0)
+    return AlcoholInsight(
+        afterDrinkPace = if (dPaceN > 0) (dPaceSum / dPaceN).roundToInt() else null,
+        afterSoberPace = if (sPaceN > 0) (sPaceSum / sPaceN).roundToInt() else null,
+        afterDrinkHr = if (dHrN > 0) dHrSum / dHrN else null,
+        afterSoberHr = if (sHrN > 0) sHrSum / sHrN else null,
+        hasData = hasData
+    )
+}
+
 /** Chronological data points for a trend chart: (short date label, bar value, value text). */
 private fun trendPoints(
     data: Map<String, DayRecord>,
@@ -1464,7 +1631,7 @@ private fun trendPoints(
 
 private fun statsFrom(label: String, recs: Collection<DayRecord>): PeriodStats {
     var ay = 0; var an = 0; var r = 0; var w = 0; var rest = 0
-    var km = 0.0; var min = 0; var kcal = 0; var elev = 0
+    var km = 0.0; var min = 0; var kcal = 0; var elev = 0; var units = 0
     var hrWeighted = 0.0; var hrMin = 0
     recs.forEach {
         when (it.alcohol) { "yes" -> ay++; "no" -> an++ }
@@ -1473,12 +1640,13 @@ private fun statsFrom(label: String, recs: Collection<DayRecord>): PeriodStats {
         min += it.durationMin ?: 0
         kcal += it.calories ?: 0
         elev += it.elevationM ?: 0
+        units += it.alcoholUnits ?: 0
         val hr = it.avgHr
         val dm = it.durationMin ?: 0
         if (hr != null && dm > 0) { hrWeighted += hr.toDouble() * dm; hrMin += dm }
     }
     val avgHr = if (hrMin > 0) (hrWeighted / hrMin).roundToInt() else null
-    return PeriodStats(label, recs.size, ay, an, r, w, rest, km, min, kcal, avgHr, elev)
+    return PeriodStats(label, recs.size, ay, an, r, w, rest, km, min, kcal, avgHr, elev, units)
 }
 
 private fun monthlyStats(data: Map<String, DayRecord>): List<PeriodStats> {
