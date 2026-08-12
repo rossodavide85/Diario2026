@@ -5,6 +5,7 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.DistanceRecord
+import androidx.health.connect.client.records.ElevationGainedRecord
 import androidx.health.connect.client.records.ExerciseSessionRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.request.AggregateRequest
@@ -22,7 +23,8 @@ data class ImportedDay(
     val km: Double,
     val minutes: Int,
     val calories: Int,
-    val avgHr: Int?
+    val avgHr: Int?,
+    val elevationM: Int
 )
 
 /**
@@ -36,16 +38,17 @@ object HealthImport {
     private val P_DISTANCE = HealthPermission.getReadPermission(DistanceRecord::class)
     private val P_CALORIES = HealthPermission.getReadPermission(ActiveCaloriesBurnedRecord::class)
     private val P_HEART = HealthPermission.getReadPermission(HeartRateRecord::class)
+    private val P_ELEVATION = HealthPermission.getReadPermission(ElevationGainedRecord::class)
 
     // Everything we ask for (history lets us read further back than the default 30 days).
     val PERMISSIONS: Set<String> = setOf(
-        P_EXERCISE, P_DISTANCE, P_CALORIES, P_HEART,
+        P_EXERCISE, P_DISTANCE, P_CALORIES, P_HEART, P_ELEVATION,
         HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY
     )
 
-    // Core permissions needed to import at all; calories/heart-rate are a bonus.
+    // Core permissions needed to import at all; the rest are a bonus.
     private val CORE: Set<String> = setOf(P_EXERCISE, P_DISTANCE)
-    private val ALL_READ: Set<String> = setOf(P_EXERCISE, P_DISTANCE, P_CALORIES, P_HEART)
+    private val ALL_READ: Set<String> = setOf(P_EXERCISE, P_DISTANCE, P_CALORIES, P_HEART, P_ELEVATION)
 
     fun sdkStatus(context: Context): Int = HealthConnectClient.getSdkStatus(context)
 
@@ -68,6 +71,7 @@ object HealthImport {
         var kcal = 0.0
         var hrWeighted = 0.0
         var hrMinutes = 0
+        var elev = 0.0
     }
 
     /** Reads all run/walk sessions of [YEAR] and aggregates them per calendar day. */
@@ -114,6 +118,12 @@ object HealthImport {
                 hc.aggregate(AggregateRequest(setOf(HeartRateRecord.BPM_AVG), window))[HeartRateRecord.BPM_AVG]
             }.getOrNull()
 
+            val elev = runCatching {
+                hc.aggregate(AggregateRequest(setOf(ElevationGainedRecord.ELEVATION_GAINED_TOTAL), window))[
+                    ElevationGainedRecord.ELEVATION_GAINED_TOTAL
+                ]?.inMeters
+            }.getOrNull() ?: 0.0
+
             val minutes = Duration.between(s.startTime, s.endTime).toMinutes().toInt()
 
             val acc = byDay.getOrPut(key) { Acc() }
@@ -121,6 +131,7 @@ object HealthImport {
             acc.km += km
             acc.minutes += minutes
             acc.kcal += kcal
+            acc.elev += elev
             if (hr != null && minutes > 0) {
                 acc.hrWeighted += hr.toDouble() * minutes
                 acc.hrMinutes += minutes
@@ -133,7 +144,8 @@ object HealthImport {
                 km = a.km,
                 minutes = a.minutes,
                 calories = a.kcal.roundToInt(),
-                avgHr = if (a.hrMinutes > 0) (a.hrWeighted / a.hrMinutes).roundToInt() else null
+                avgHr = if (a.hrMinutes > 0) (a.hrWeighted / a.hrMinutes).roundToInt() else null,
+                elevationM = a.elev.roundToInt()
             )
         }
     }

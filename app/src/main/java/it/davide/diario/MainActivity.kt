@@ -16,7 +16,9 @@ import androidx.core.content.ContextCompat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -102,7 +104,8 @@ data class DayRecord(
     val distanceKm: Double? = null,
     val durationMin: Int? = null,
     val calories: Int? = null,
-    val avgHr: Int? = null
+    val avgHr: Int? = null,
+    val elevationM: Int? = null
 ) {
     val isEmpty: Boolean get() = alcohol == null && activity == null
 }
@@ -155,6 +158,8 @@ private val CRun = Color(0xFFE05A3A)
 private val CWalk = Color(0xFF57A65F)
 private val CRest = Color(0xFF9A9282)
 private val CWater = Color(0xFF3F9AC9)
+private val CHeart = Color(0xFFD64550)
+private val CElev = Color(0xFF9E7B4F)
 
 private val MONTHS = arrayOf(
     "Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno",
@@ -193,7 +198,8 @@ data class PeriodStats(
     val totalKm: Double,
     val totalMin: Int,
     val totalCalories: Int,
-    val avgHr: Int?
+    val avgHr: Int?,
+    val totalElevation: Int
 )
 
 // ---------------------------------------------------------------------------
@@ -321,7 +327,8 @@ fun DiaryApp() {
                     distanceKm = imp.km.takeIf { it > 0 },
                     durationMin = imp.minutes.takeIf { it > 0 },
                     calories = imp.calories.takeIf { it > 0 },
-                    avgHr = imp.avgHr
+                    avgHr = imp.avgHr,
+                    elevationM = imp.elevationM.takeIf { it > 0 }
                 )
             }
             store.save(data)
@@ -697,6 +704,7 @@ private fun EditDialog(
                     record.calories?.let { add("🔥 $it kcal") }
                     record.avgHr?.let { add("❤️ $it bpm") }
                     fmtPace(record.distanceKm ?: 0.0, record.durationMin ?: 0)?.let { add("⏩ $it") }
+                    record.elevationM?.let { if (it > 0) add("⛰️ $it m") }
                 }
                 if (garmin.isNotEmpty()) {
                     Text(
@@ -872,6 +880,18 @@ private fun StatsScreen(
     val months = monthlyStats(data)
     val weeks = weeklyStats(data)
 
+    val kmPts = trendPoints(data,
+        { it.distanceKm?.toFloat()?.takeIf { v -> v > 0f } },
+        { fmtKm(it.distanceKm ?: 0.0) })
+    val pacePts = trendPoints(data,
+        { r -> if ((r.distanceKm ?: 0.0) > 0.0 && (r.durationMin ?: 0) > 0) r.durationMin!!.toFloat() / r.distanceKm!!.toFloat() else null },
+        { r -> fmtPace(r.distanceKm ?: 0.0, r.durationMin ?: 0) ?: "" })
+    val hrPts = trendPoints(data, { it.avgHr?.toFloat() }, { "${it.avgHr}" })
+    val elevPts = trendPoints(data,
+        { it.elevationM?.toFloat()?.takeIf { v -> v > 0f } },
+        { "${it.elevationM}" })
+    val anyTrend = kmPts.isNotEmpty() || pacePts.isNotEmpty() || hrPts.isNotEmpty() || elevPts.isNotEmpty()
+
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.fillMaxSize()) {
@@ -888,6 +908,11 @@ private fun StatsScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     item { StreakCard(streaks) }
+                    if (anyTrend) item { SectionTitle("Andamento") }
+                    if (kmPts.isNotEmpty()) item { TrendChart("Distanza (km)", CRun, kmPts) }
+                    if (pacePts.isNotEmpty()) item { TrendChart("Passo (min/km)", CWater, pacePts) }
+                    if (hrPts.isNotEmpty()) item { TrendChart("Frequenza cardiaca (bpm)", CHeart, hrPts) }
+                    if (elevPts.isNotEmpty()) item { TrendChart("Dislivello (m)", CElev, elevPts) }
                     item { SectionTitle("Per mese") }
                     if (months.isEmpty()) item { EmptyHint() }
                     items(months.size) { i -> PeriodCard(months[i]) }
@@ -895,6 +920,43 @@ private fun StatsScreen(
                     if (weeks.isEmpty()) item { EmptyHint() }
                     items(weeks.size) { i -> PeriodCard(weeks[i]) }
                     item { Spacer(Modifier.height(12.dp)) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrendChart(title: String, color: Color, points: List<Triple<String, Float, String>>) {
+    if (points.isEmpty()) return
+    val maxV = points.maxOf { it.second }.coerceAtLeast(0.0001f)
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+            Text(
+                title,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(6.dp))
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                points.forEach { (date, v, vtext) ->
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(vtext, fontSize = 9.sp, maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(2.dp))
+                        Box(
+                            Modifier.width(22.dp)
+                                .height((6f + (v / maxV) * 84f).dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(color)
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(date, fontSize = 9.sp, maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }
@@ -972,6 +1034,7 @@ private fun PeriodCard(s: PeriodStats) {
                 fmtPace(s.totalKm, s.totalMin)?.let { add("⏩ $it") }
                 if (s.totalCalories > 0) add("🔥 ${s.totalCalories} kcal")
                 s.avgHr?.let { add("❤️ $it bpm") }
+                if (s.totalElevation > 0) add("⛰️ ${s.totalElevation} m")
             }
             if (metrics.isNotEmpty()) {
                 Text(
@@ -1100,6 +1163,7 @@ private fun describe(rec: DayRecord): String {
         fmtPace(rec.distanceKm ?: 0.0, rec.durationMin ?: 0)?.let { add(it) }
         rec.calories?.let { if (it > 0) add("$it kcal") }
         rec.avgHr?.let { add("$it bpm") }
+        rec.elevationM?.let { if (it > 0) add("$it m D+") }
     }
     if (metrics.isNotEmpty()) parts.add("(${metrics.joinToString(", ")})")
     return if (parts.isEmpty()) "—" else parts.joinToString("    ")
@@ -1136,9 +1200,20 @@ internal fun alcoholFreeStreaks(data: Map<String, DayRecord>): Streaks {
     return Streaks(current, longest)
 }
 
+/** Chronological data points for a trend chart: (short date label, bar value, value text). */
+private fun trendPoints(
+    data: Map<String, DayRecord>,
+    value: (DayRecord) -> Float?,
+    text: (DayRecord) -> String
+): List<Triple<String, Float, String>> =
+    data.entries
+        .mapNotNull { e -> value(e.value)?.let { v -> Triple(LocalDate.parse(e.key), v, text(e.value)) } }
+        .sortedBy { it.first }
+        .map { (d, v, t) -> Triple("${d.dayOfMonth}/${d.monthValue}", v, t) }
+
 private fun statsFrom(label: String, recs: Collection<DayRecord>): PeriodStats {
     var ay = 0; var an = 0; var r = 0; var w = 0; var rest = 0
-    var km = 0.0; var min = 0; var kcal = 0
+    var km = 0.0; var min = 0; var kcal = 0; var elev = 0
     var hrWeighted = 0.0; var hrMin = 0
     recs.forEach {
         when (it.alcohol) { "yes" -> ay++; "no" -> an++ }
@@ -1146,12 +1221,13 @@ private fun statsFrom(label: String, recs: Collection<DayRecord>): PeriodStats {
         km += it.distanceKm ?: 0.0
         min += it.durationMin ?: 0
         kcal += it.calories ?: 0
+        elev += it.elevationM ?: 0
         val hr = it.avgHr
         val dm = it.durationMin ?: 0
         if (hr != null && dm > 0) { hrWeighted += hr.toDouble() * dm; hrMin += dm }
     }
     val avgHr = if (hrMin > 0) (hrWeighted / hrMin).roundToInt() else null
-    return PeriodStats(label, recs.size, ay, an, r, w, rest, km, min, kcal, avgHr)
+    return PeriodStats(label, recs.size, ay, an, r, w, rest, km, min, kcal, avgHr, elev)
 }
 
 private fun monthlyStats(data: Map<String, DayRecord>): List<PeriodStats> {
