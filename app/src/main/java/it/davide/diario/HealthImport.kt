@@ -253,18 +253,23 @@ object HealthImport {
             samples.filterIndexed { idx, _ -> idx % step == 0 }.map { it.beatsPerMinute.toInt() }
         }
 
-        val splits = s.laps.mapIndexed { idx, lap ->
-            val lw = TimeRangeFilter.between(lap.startTime, lap.endTime)
-            val lapKm = lap.length?.inKilometers
-                ?: runCatching {
-                    hc.aggregate(AggregateRequest(setOf(DistanceRecord.DISTANCE_TOTAL), lw))[DistanceRecord.DISTANCE_TOTAL]?.inKilometers
-                }.getOrNull() ?: 0.0
-            val lapSec = Duration.between(lap.startTime, lap.endTime).seconds.toInt()
-            val lapHr = runCatching {
-                hc.aggregate(AggregateRequest(setOf(HeartRateRecord.BPM_AVG), lw))[HeartRateRecord.BPM_AVG]
-            }.getOrNull()?.toInt()
-            val paceSec = if (lapKm > 0) (lapSec / lapKm).roundToInt() else 0
-            ActivitySplit("${idx + 1}", lapSec, lapKm, if (paceSec > 0) paceText(paceSec) else "—", lapHr)
+        val splits = if (s.laps.isNotEmpty()) {
+            s.laps.mapIndexed { idx, lap ->
+                val lw = TimeRangeFilter.between(lap.startTime, lap.endTime)
+                val lapKm = lap.length?.inKilometers
+                    ?: runCatching {
+                        hc.aggregate(AggregateRequest(setOf(DistanceRecord.DISTANCE_TOTAL), lw))[DistanceRecord.DISTANCE_TOTAL]?.inKilometers
+                    }.getOrNull() ?: 0.0
+                val lapSec = Duration.between(lap.startTime, lap.endTime).seconds.toInt()
+                val lapHr = runCatching {
+                    hc.aggregate(AggregateRequest(setOf(HeartRateRecord.BPM_AVG), lw))[HeartRateRecord.BPM_AVG]
+                }.getOrNull()?.toInt()
+                val paceSec = if (lapKm > 0) (lapSec / lapKm).roundToInt() else 0
+                ActivitySplit("${idx + 1}", lapSec, lapKm, if (paceSec > 0) paceText(paceSec) else "—", lapHr)
+            }
+        } else {
+            // Garmin often doesn't write laps to Health Connect — compute per-km splits ourselves.
+            computeKmSplits(hc, s.startTime, window, samples)
         }
 
         val bestPace = splits.filter { it.km > 0 }.minOfOrNull { (it.seconds / it.km).roundToInt() }
@@ -290,4 +295,79 @@ object HealthImport {
 
     private fun paceText(secPerKm: Int): String =
         "%d'%02d\"".format(secPerKm / 60, secPerKm % 60)
+
+    /**
+     * Computes per-kilometre splits when Garmin didn't write laps: builds a cumulative
+     * distance-over-time timeline from DistanceRecord (or integrates SpeedRecord as a
+     * fallback), then finds the elapsed time at every 1 km boundary.
+     */
+    private suspend fun computeKmSplits(
+        hc: HealthConnectClient,
+        start: Instant,
+        window: TimeRangeFilter,
+        hrSamples: List<HeartRateRecord.Sample>
+    ): List<ActivitySplit> {
+        val points = ArrayList<Pair<Instant, Double>>() // (time, cumulative metres)
+
+        val distRecs = runCatching {
+            hc.readRecords(ReadRecordsRequest(DistanceRecord::class, window)).records.sortedBy { it.startTime }
+        }.getOrDefault(emptyList())
+
+        if (distRecs.size >= 2) {
+            var cum = 0.0
+            points.add(start to 0.0)
+            for (r in distRecs) {
+                cum += r.distance.inMeters
+                points.add(r.endTime to cum)
+            }
+        } else {
+            val spd = runCatching {
+                hc.readRecords(ReadRecordsRequest(SpeedRecord::class, window)).records
+            }.getOrDefault(emptyList()).flatMap { it.samples }.sortedBy { it.time }
+            if (spd.size >= 2) {
+                var cum = 0.0
+                points.add(spd.first().time to 0.0)
+                for (i in 1 until spd.size) {
+                    val dt = Duration.between(spd[i - 1].time, spd[i].time).toMillis() / 1000.0
+                    cum += spd[i - 1].speed.inMetersPerSecond * dt
+                    points.add(spd[i].time to cum)
+                }
+            }
+        }
+        if (points.size < 2) return emptyList()
+
+        val splits = ArrayList<ActivitySplit>()
+        var kmIndex = 1
+        var prevTime = points.first().first
+        var target = 1000.0
+        for (i in 1 until points.size) {
+            val (t0, c0) = points[i - 1]
+            val (t1, c1) = points[i]
+            while (c1 >= target && c1 > c0) {
+                val frac = (target - c0) / (c1 - c0)
+                val tKm = t0.plusMillis((Duration.between(t0, t1).toMillis() * frac).toLong())
+                val segSec = Duration.between(prevTime, tKm).seconds.toInt()
+                splits.add(
+                    ActivitySplit("Km $kmIndex", segSec, 1.0, if (segSec > 0) paceText(segSec) else "—", avgHrBetween(hrSamples, prevTime, tKm))
+                )
+                prevTime = tKm; kmIndex++; target += 1000.0
+            }
+        }
+        val totalM = points.last().second
+        val remainder = (totalM - (kmIndex - 1) * 1000.0) / 1000.0
+        if (remainder > 0.05) {
+            val segSec = Duration.between(prevTime, points.last().first).seconds.toInt()
+            val paceSec = if (remainder > 0) (segSec / remainder).roundToInt() else 0
+            splits.add(
+                ActivitySplit("Km $kmIndex", segSec, remainder, if (paceSec > 0) paceText(paceSec) else "—", avgHrBetween(hrSamples, prevTime, points.last().first))
+            )
+        }
+        return splits
+    }
+
+    private fun avgHrBetween(samples: List<HeartRateRecord.Sample>, a: Instant, b: Instant): Int? {
+        val inWin = samples.filter { !it.time.isBefore(a) && !it.time.isAfter(b) }
+        if (inWin.isEmpty()) return null
+        return (inWin.sumOf { it.beatsPerMinute } / inWin.size).toInt()
+    }
 }

@@ -1084,7 +1084,7 @@ private fun SplitsTable(splits: List<ActivitySplit>) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         Column(Modifier.fillMaxWidth().padding(12.dp)) {
             Row(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-                SplitCell("#", 0.5f, bold = true)
+                SplitCell("Tratto", 0.9f, bold = true)
                 SplitCell("Tempo", 1f, bold = true)
                 SplitCell("km", 1f, bold = true)
                 SplitCell("Passo", 1f, bold = true)
@@ -1092,7 +1092,7 @@ private fun SplitsTable(splits: List<ActivitySplit>) {
             }
             splits.forEach { sp ->
                 Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                    SplitCell(sp.label, 0.5f)
+                    SplitCell(sp.label, 0.9f)
                     SplitCell(fmtHms(sp.seconds), 1f)
                     SplitCell(fmtKm(sp.km), 1f)
                     SplitCell(sp.paceText, 1f)
