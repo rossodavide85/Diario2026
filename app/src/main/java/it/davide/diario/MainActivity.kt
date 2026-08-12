@@ -19,6 +19,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -117,10 +118,40 @@ data class DayRecord(
     val calories: Int? = null,
     val avgHr: Int? = null,
     val elevationM: Int? = null,
-    val alcoholUnits: Int? = null
+    val alcoholUnits: Int? = null,
+    val drinks: Map<String, Int>? = null
 ) {
     val isEmpty: Boolean get() = alcohol == null && activity == null
 }
+
+data class Drink(val key: String, val label: String, val units: Double, val kcal: Int)
+
+// Standard servings: alcohol units (1 unit ≈ 12 g ethanol) and calories per serving.
+val DRINKS = listOf(
+    Drink("wine", "🍷 Vino (125 ml)", 1.0, 90),
+    Drink("beer", "🍺 Birra chiara (33 cl)", 1.1, 140),
+    Drink("strongbeer", "🍺 Doppio malto (33 cl)", 1.7, 230),
+    Drink("spirit", "🥃 Superalcolico (40 ml)", 1.0, 95),
+    Drink("aperitif", "🍹 Aperitivo (spritz)", 0.8, 130)
+)
+private val DRINK_BY_KEY = DRINKS.associateBy { it.key }
+
+/** Total alcohol units of a day (from the drinks map, or legacy alcoholUnits). */
+fun unitsOf(rec: DayRecord): Double {
+    val d = rec.drinks
+    return if (d != null) d.entries.sumOf { (k, c) -> (DRINK_BY_KEY[k]?.units ?: 0.0) * c }
+    else (rec.alcoholUnits ?: 0).toDouble()
+}
+
+/** Calories from alcohol for a day (from the drinks map, or legacy units × 90). */
+fun alcoholKcalOf(rec: DayRecord): Int {
+    val d = rec.drinks
+    return if (d != null) d.entries.sumOf { (k, c) -> (DRINK_BY_KEY[k]?.kcal ?: 0) * c }
+    else (rec.alcoholUnits ?: 0) * KCAL_PER_ALCOHOL_UNIT
+}
+
+fun fmtUnits(u: Double): String =
+    if (u == u.toLong().toDouble()) u.toLong().toString() else "%.1f".format(u)
 
 private fun seedData(): Map<String, DayRecord> = mapOf(
     "2026-07-28" to DayRecord("yes", "rest"),
@@ -678,17 +709,22 @@ private fun EditDialog(
     onShowDetail: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
-    var alcohol by remember { mutableStateOf(record.alcohol) }
-    var units by remember { mutableStateOf(record.alcoholUnits?.takeIf { it > 0 } ?: 1) }
+    val drinkCounts = remember { mutableStateMapOf<String, Int>().apply { record.drinks?.let { putAll(it) } } }
+    var sober by remember { mutableStateOf(record.alcohol == "no") }
     var activity by remember { mutableStateOf(record.activity) }
     var kmText by remember { mutableStateOf(record.distanceKm?.let { fmtKm(it) } ?: "") }
     var minText by remember { mutableStateOf(record.durationMin?.toString() ?: "") }
+    val liveUnits = drinkCounts.entries.sumOf { (k, c) -> (DRINK_BY_KEY[k]?.units ?: 0.0) * c }
+    val liveAlcKcal = drinkCounts.entries.sumOf { (k, c) -> (DRINK_BY_KEY[k]?.kcal ?: 0) * c }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Registra giornata") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 Text(dateLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
 
                 if (onShowDetail != null) {
@@ -697,39 +733,59 @@ private fun EditDialog(
                     }
                 }
 
+                // Calorie balance: burned by activity vs consumed with alcohol.
+                val burned = record.calories ?: 0
+                if (burned > 0 || liveAlcKcal > 0) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                        Column {
+                            Text("🔥 $burned", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = CRun)
+                            Text("bruciate (attività)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Column {
+                            Text("🍺 $liveAlcKcal", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = CAlcohol)
+                            Text("assunte (alcol)", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+
                 Spacer(Modifier.height(4.dp))
                 SectionLabel("ALCOOL")
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ChoiceChip("🍺 Sì", alcohol == "yes", CAlcohol) {
-                        alcohol = if (alcohol == "yes") null else "yes"
-                    }
-                    ChoiceChip("No", alcohol == "no", CWater) {
-                        alcohol = if (alcohol == "no") null else "no"
+                    ChoiceChip("🚱 Niente oggi", sober && drinkCounts.values.sum() == 0, CWater) {
+                        sober = !sober
+                        if (sober) drinkCounts.clear()
                     }
                 }
-                if (alcohol == "yes") {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text("Unità:", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                DRINKS.forEach { dr ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(dr.label, modifier = Modifier.weight(1f), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
                         TextButton(
-                            onClick = { if (units > 1) units-- },
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp)
+                            onClick = {
+                                val c = drinkCounts[dr.key] ?: 0
+                                if (c > 0) { if (c - 1 == 0) drinkCounts.remove(dr.key) else drinkCounts[dr.key] = c - 1 }
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
                         ) { Text("−", fontSize = 20.sp) }
-                        Text("$units", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = CAlcohol)
+                        Text(
+                            "${drinkCounts[dr.key] ?: 0}",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                            color = if ((drinkCounts[dr.key] ?: 0) > 0) CAlcohol else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.width(22.dp)
+                        )
                         TextButton(
-                            onClick = { if (units < 20) units++ },
-                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp)
+                            onClick = { drinkCounts[dr.key] = (drinkCounts[dr.key] ?: 0) + 1; sober = false },
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
                         ) { Text("+", fontSize = 20.sp) }
                     }
+                }
+                if (liveUnits > 0) {
                     Text(
-                        "1 unità ≈ 12 g di alcol:\n" +
-                            "🍷 vino 125 ml  ·  🍺 birra chiara 33 cl  ·  🍺 doppio malto ~20 cl\n" +
-                            "🥃 superalcolico 40 ml  ·  🍹 aperitivo 80 ml",
-                        fontSize = 11.sp,
-                        lineHeight = 16.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        "Totale: ${fmtUnits(liveUnits)} unità  ·  ~$liveAlcKcal kcal",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = CAlcohol
                     )
                 }
 
@@ -792,15 +848,17 @@ private fun EditDialog(
                 val withMetrics = activity == "run" || activity == "walk"
                 val km = if (withMetrics) kmText.replace(",", ".").toDoubleOrNull()?.takeIf { it > 0 } else null
                 val min = if (withMetrics) minText.toIntOrNull()?.takeIf { it > 0 } else null
-                val alcUnits = when (alcohol) {
-                    "yes" -> units.coerceAtLeast(1)
-                    "no" -> 0
-                    else -> null
+                val drinksMap = drinkCounts.filterValues { it > 0 }.toMap()
+                val alcoholState = when {
+                    drinksMap.isNotEmpty() -> "yes"
+                    sober -> "no"
+                    else -> record.alcohol
                 }
                 onConfirm(
                     record.copy(
-                        alcohol = alcohol,
-                        alcoholUnits = alcUnits,
+                        alcohol = alcoholState,
+                        drinks = drinksMap.ifEmpty { null },
+                        alcoholUnits = if (drinksMap.isNotEmpty()) null else record.alcoholUnits,
                         activity = activity,
                         distanceKm = if (withMetrics) km else null,
                         durationMin = if (withMetrics) min else null,
@@ -1277,7 +1335,7 @@ private fun AlcoholSummaryCard(data: SnapshotStateMap<String, DayRecord>) {
     val goal = ALCOHOL_WEEKLY_GOAL
     val sober = soberPercent(data)
     val units = totalAlcoholUnits(data)
-    val kcal = units * KCAL_PER_ALCOHOL_UNIT
+    val kcal = totalAlcoholKcal(data)
     val overGoal = week > goal
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1300,7 +1358,7 @@ private fun AlcoholSummaryCard(data: SnapshotStateMap<String, DayRecord>) {
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 sober?.let { Text("🚱 $it% giorni sobri", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                if (units > 0) Text("🍺 $units unità", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (units > 0) Text("🍺 ${fmtUnits(units)} unità", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (kcal > 0) Text("🔥 ~$kcal kcal da alcol", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -1520,7 +1578,10 @@ private fun FilterScreen(
 private fun describe(rec: DayRecord): String {
     val parts = mutableListOf<String>()
     when (rec.alcohol) {
-        "yes" -> parts.add("🍺 Alcool" + (rec.alcoholUnits?.takeIf { it > 0 }?.let { " ($it u.)" } ?: ""))
+        "yes" -> {
+            val u = unitsOf(rec)
+            parts.add("🍺 Alcool" + (if (u > 0) " (${fmtUnits(u)} u.)" else ""))
+        }
         "no" -> parts.add("💧 Niente alcool")
     }
     when (rec.activity) {
@@ -1588,8 +1649,11 @@ private fun soberPercent(data: Map<String, DayRecord>): Int? {
     return if (tot == 0) null else no * 100 / tot
 }
 
-private fun totalAlcoholUnits(data: Map<String, DayRecord>): Int =
-    data.values.sumOf { it.alcoholUnits ?: 0 }
+private fun totalAlcoholUnits(data: Map<String, DayRecord>): Double =
+    data.values.sumOf { unitsOf(it) }
+
+private fun totalAlcoholKcal(data: Map<String, DayRecord>): Int =
+    data.values.sumOf { alcoholKcalOf(it) }
 
 data class AlcoholInsight(
     val afterDrinkPace: Int?, val afterSoberPace: Int?,
@@ -1648,7 +1712,7 @@ private fun statsFrom(label: String, recs: Collection<DayRecord>): PeriodStats {
         min += it.durationMin ?: 0
         kcal += it.calories ?: 0
         elev += it.elevationM ?: 0
-        units += it.alcoholUnits ?: 0
+        units += unitsOf(it).roundToInt()
         val hr = it.avgHr
         val dm = it.durationMin ?: 0
         if (hr != null && dm > 0) { hrWeighted += hr.toDouble() * dm; hrMin += dm }
