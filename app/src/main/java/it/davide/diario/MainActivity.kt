@@ -243,7 +243,8 @@ data class PeriodStats(
     val totalCalories: Int,
     val avgHr: Int?,
     val totalElevation: Int,
-    val alcoholUnits: Int
+    val alcoholUnits: Int,
+    val alcoholKcal: Int
 )
 
 // ---------------------------------------------------------------------------
@@ -468,6 +469,7 @@ fun DiaryApp() {
             ) {
                 Text("⌚  Sincronizza Garmin ora")
             }
+            MonthBalanceCard(data)
             LazyColumn(
                 state = listState,
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
@@ -1329,6 +1331,48 @@ private fun TrendChart(title: String, color: Color, points: List<Triple<String, 
     }
 }
 
+/** Horizontal balance: burned (activity) vs consumed (alcohol). The divider leans
+ *  toward the smaller value — the bigger side fills more of the bar. */
+@Composable
+private fun CalorieBalanceBar(burned: Int, consumed: Int) {
+    Row(
+        Modifier.fillMaxWidth().height(18.dp).clip(RoundedCornerShape(9.dp))
+            .background(MaterialTheme.colorScheme.surface)
+    ) {
+        if (burned > 0) Box(Modifier.weight(burned.toFloat()).fillMaxHeight().background(CRun))
+        if (consumed > 0) Box(Modifier.weight(consumed.toFloat()).fillMaxHeight().background(CAlcohol))
+    }
+}
+
+/** Prominent current-month calorie balance for the home screen. */
+@Composable
+private fun MonthBalanceCard(data: SnapshotStateMap<String, DayRecord>) {
+    val today = LocalDate.now()
+    val prefix = "%04d-%02d".format(today.year, today.monthValue)
+    var burned = 0
+    var consumed = 0
+    data.forEach { (k, v) ->
+        if (k.startsWith(prefix)) { burned += v.calories ?: 0; consumed += alcoholKcalOf(v) }
+    }
+    if (burned == 0 && consumed == 0) return
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                "📅 ${MONTHS[today.monthValue - 1]} — bilancio calorie",
+                fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("🔥 $burned bruciate", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = CRun)
+                Text("🍺 $consumed assunte", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = CAlcohol)
+            }
+            CalorieBalanceBar(burned, consumed)
+        }
+    }
+}
+
 @Composable
 private fun AlcoholSummaryCard(data: SnapshotStateMap<String, DayRecord>) {
     val week = currentWeekAlcoholDays(data)
@@ -1471,6 +1515,14 @@ private fun PeriodCard(s: PeriodStats) {
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+            if (s.totalCalories > 0 || s.alcoholKcal > 0) {
+                Spacer(Modifier.height(2.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("🔥 ${s.totalCalories} kcal", fontSize = 11.sp, color = CRun)
+                    Text("🍺 ${s.alcoholKcal} kcal", fontSize = 11.sp, color = CAlcohol)
+                }
+                CalorieBalanceBar(s.totalCalories, s.alcoholKcal)
             }
         }
     }
@@ -1703,7 +1755,7 @@ private fun trendPoints(
 
 private fun statsFrom(label: String, recs: Collection<DayRecord>): PeriodStats {
     var ay = 0; var an = 0; var r = 0; var w = 0; var rest = 0
-    var km = 0.0; var min = 0; var kcal = 0; var elev = 0; var units = 0
+    var km = 0.0; var min = 0; var kcal = 0; var elev = 0; var units = 0; var akcal = 0
     var hrWeighted = 0.0; var hrMin = 0
     recs.forEach {
         when (it.alcohol) { "yes" -> ay++; "no" -> an++ }
@@ -1713,12 +1765,13 @@ private fun statsFrom(label: String, recs: Collection<DayRecord>): PeriodStats {
         kcal += it.calories ?: 0
         elev += it.elevationM ?: 0
         units += unitsOf(it).roundToInt()
+        akcal += alcoholKcalOf(it)
         val hr = it.avgHr
         val dm = it.durationMin ?: 0
         if (hr != null && dm > 0) { hrWeighted += hr.toDouble() * dm; hrMin += dm }
     }
     val avgHr = if (hrMin > 0) (hrWeighted / hrMin).roundToInt() else null
-    return PeriodStats(label, recs.size, ay, an, r, w, rest, km, min, kcal, avgHr, elev, units)
+    return PeriodStats(label, recs.size, ay, an, r, w, rest, km, min, kcal, avgHr, elev, units, akcal)
 }
 
 private fun monthlyStats(data: Map<String, DayRecord>): List<PeriodStats> {

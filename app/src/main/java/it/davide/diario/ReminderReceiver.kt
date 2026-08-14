@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import java.time.LocalDate
 import java.util.Calendar
 
 /** Evening reminder to log the day. Fires (approximately) every day at 23:30. */
@@ -89,6 +90,20 @@ class ReminderReceiver : BroadcastReceiver() {
             Reminder.ensureChannel(context)
             Reminder.schedule(context)
             return
+        }
+        // If today has no activity logged yet, mark it as rest. If the user actually
+        // did a Garmin activity, the next in-app sync overwrites this with run/walk.
+        runCatching {
+            val store = DiaryStore(context)
+            val data = store.load().toMutableMap()
+            val today = LocalDate.now()
+            val key = "%04d-%02d-%02d".format(today.year, today.monthValue, today.dayOfMonth)
+            val rec = data[key]
+            if (rec == null || rec.activity == null) {
+                data[key] = (rec ?: DayRecord()).copy(activity = "rest")
+                store.save(data)
+                DiaryWidgetProvider.refresh(context)
+            }
         }
         Reminder.notifyNow(context)
     }
