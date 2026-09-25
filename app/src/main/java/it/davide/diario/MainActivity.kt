@@ -186,7 +186,9 @@ class DiaryStore(context: Context) {
     }
 
     fun save(data: Map<String, DayRecord>) {
-        runCatching { file.writeText(json.encodeToString(data)) }
+        val text = json.encodeToString(data)
+        runCatching { file.writeText(text) }
+        DiarioSync.push(text)
     }
 
     fun serialize(data: Map<String, DayRecord>): String = json.encodeToString(data)
