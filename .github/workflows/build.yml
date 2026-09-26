@@ -31,8 +31,15 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
+      - name: Compute version (numero di run + hash del commit)
+        id: ver
+        run: |
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          echo "code=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "name=1.${{ github.run_number }}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
       - name: Build signed release APK
-        run: gradle assembleRelease --no-daemon --stacktrace
+        run: gradle assembleRelease --no-daemon --stacktrace -PappVersionCode=${{ steps.ver.outputs.code }} -PappVersionName=${{ steps.ver.outputs.name }}
 
       - name: Rename APK
         run: cp app/build/outputs/apk/release/app-release.apk Diario2026.apk
@@ -48,9 +55,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: "Diario 2026 — ultima versione"
+          name: "Diario 2026 — v${{ steps.ver.outputs.name }}"
           body: |
-            APK firmato, sempre aggiornato all'ultimo commit su `main`.
+            Versione **${{ steps.ver.outputs.name }}** — APK firmato, sempre aggiornato all'ultimo commit su `main`.
             Scarica **Diario2026.apk** qui sotto e installalo sul telefono.
             Link diretto permanente:
             https://github.com/rossodavide85/Diario2026/releases/latest/download/Diario2026.apk

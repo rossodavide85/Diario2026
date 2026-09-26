@@ -453,7 +453,16 @@ fun DiaryApp() {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Diario $YEAR") },
+                title = {
+                    Column {
+                        Text("Diario $YEAR")
+                        Text(
+                            "v${BuildConfig.VERSION_NAME}",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
                 actions = {
                     TextButton(onClick = { exportLauncher.launch("diario-$YEAR-backup.json") }) {
                         Text("Backup")

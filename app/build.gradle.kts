@@ -13,8 +13,12 @@ android {
         applicationId = "it.davide.diario"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        // In CI, build.yml passes -PappVersionCode/-PappVersionName (numero di run
+        // GitHub Actions + hash breve del commit) cosi' ogni build e' riconoscibile
+        // (Impostazioni > App > Diario2026, e nell'app stessa sotto il titolo).
+        // In locale (Android Studio, senza quelle proprieta') resta un placeholder "dev".
+        versionCode = (project.findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 1
+        versionName = (project.findProperty("appVersionName") as String?) ?: "dev"
     }
 
     // Chiave di firma stabile (personale): così ogni nuova build si installa
@@ -52,6 +56,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true   // per esporre BuildConfig.VERSION_NAME nell'app (schermata principale)
     }
 }
 
