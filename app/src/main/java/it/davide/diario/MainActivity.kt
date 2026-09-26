@@ -304,6 +304,20 @@ fun DiaryApp() {
     val store = remember { DiaryStore(context) }
     val data = remember { mutableStateMapOf<String, DayRecord>().apply { putAll(store.load()) } }
 
+    // On launch: pull the server copy (best-effort) so edits made on the website's
+    // "Alcol" tab, or from another device, show up here too — not just phone -> server.
+    LaunchedEffect(Unit) {
+        val body = DiarioSync.pull()
+        if (body != null) {
+            val remote = runCatching { store.parse(body) }.getOrNull()
+            if (remote != null && remote.isNotEmpty()) {
+                data.clear()
+                data.putAll(remote)
+                store.save(data)
+            }
+        }
+    }
+
     var editingKey by remember { mutableStateOf<String?>(null) }
     var filter by remember { mutableStateOf<FilterType?>(null) }
     var showStats by remember { mutableStateOf(false) }
