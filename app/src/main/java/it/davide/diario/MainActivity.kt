@@ -449,8 +449,13 @@ fun DiaryApp() {
     val listState = rememberLazyListState()
     // Riepilogo (statistiche/pulsanti/bilancio) = 5 item iniziali della stessa lista,
     // scorrono via insieme ai mesi cosi' un mese intero si vede senza doverlo "liberare"
-    // da un header fisso. Luglio (mese 7, m=6) = 5 header + 6 = indice 11.
-    LaunchedEffect(Unit) { runCatching { listState.scrollToItem(11) } }
+    // da un header fisso. Si apre sul MESE CORRENTE (non piu' un mese fisso): cosi' non
+    // c'e' mai da scrollare tanto per arrivarci, indipendentemente da che mese sia.
+    LaunchedEffect(Unit) {
+        val today = LocalDate.now()
+        val curMonth = if (today.year == YEAR) today.monthValue else 1  // fuori dall'anno del diario: parti da gennaio
+        runCatching { listState.scrollToItem(5 + (curMonth - 1)) }
+    }
 
     Scaffold(
         topBar = {
