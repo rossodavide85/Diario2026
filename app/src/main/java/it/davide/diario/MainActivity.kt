@@ -447,14 +447,12 @@ fun DiaryApp() {
     }
 
     val listState = rememberLazyListState()
-    // Il riepilogo (statistiche/pulsanti/bilancio) e' UN SOLO item, richiudibile: cosi'
-    // il mese corrente resta in primo piano appena sotto, non sepolto sotto blocchi fissi.
-    // Si apre sul MESE CORRENTE (non piu' un mese fisso): cosi' non c'e' mai da scrollare
+    // Si apre sul MESE CORRENTE (non un mese fisso): cosi' non c'e' mai da scrollare
     // tanto per arrivarci, indipendentemente da che mese sia.
     LaunchedEffect(Unit) {
         val today = LocalDate.now()
         val curMonth = if (today.year == YEAR) today.monthValue else 1  // fuori dall'anno del diario: parti da gennaio
-        runCatching { listState.scrollToItem(1 + (curMonth - 1)) }
+        runCatching { listState.scrollToItem(curMonth - 1) }
     }
 
     Scaffold(
@@ -481,32 +479,31 @@ fun DiaryApp() {
             )
         }
     ) { pad ->
-        // Un'unica lista scorrevole: il riepilogo (statistiche/pulsanti/bilancio) scorre
-        // via insieme ai mesi, invece di restare fisso in cima a rubare spazio verticale.
-        // Cosi' quando arrivi a un mese lo vedi INTERO, non tagliato in fondo allo schermo.
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.padding(pad).fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            item {
-                CollapsibleSummary(
-                    counts = counts,
-                    data = data,
-                    onFilter = { filter = it },
-                    onShowStats = { showStats = true },
-                    onShowHeatmap = { showHeatmap = true },
-                    onSyncGarmin = { importFromGarmin() }
-                )
-            }
-            items(12) { m ->
-                MonthView(
-                    month = m + 1,
-                    data = data,
-                    today = LocalDate.now(),
-                    onDayClick = { key -> editingKey = key }
-                )
+        // Il riepilogo resta FISSO in cima (mai in scroll): quando e' chiuso occupa una
+        // sola riga, cosi' il mese corrente sotto ottiene comunque quasi tutto lo schermo;
+        // se lo apri, resta li' finche' non lo richiudi tu.
+        Column(Modifier.padding(pad).fillMaxSize()) {
+            CollapsibleSummary(
+                counts = counts,
+                data = data,
+                onFilter = { filter = it },
+                onShowStats = { showStats = true },
+                onShowHeatmap = { showHeatmap = true },
+                onSyncGarmin = { importFromGarmin() }
+            )
+            LazyColumn(
+                state = listState,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(12) { m ->
+                    MonthView(
+                        month = m + 1,
+                        data = data,
+                        today = LocalDate.now(),
+                        onDayClick = { key -> editingKey = key }
+                    )
+                }
             }
         }
     }
@@ -575,13 +572,15 @@ private fun CollapsibleSummary(
     onSyncGarmin: () -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth()) {
+    // Stesso inset orizzontale (12dp) del contentPadding della lista dei mesi qui sotto,
+    // cosi' il pannello resta allineato col calendario anche se non e' piu' dentro quella lista.
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(10.dp))
                 .clickable { expanded = !expanded }
-                .padding(horizontal = 4.dp, vertical = 10.dp),
+                .padding(vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
