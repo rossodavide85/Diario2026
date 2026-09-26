@@ -447,8 +447,10 @@ fun DiaryApp() {
     }
 
     val listState = rememberLazyListState()
-    // Open on July (index 6) at first launch.
-    LaunchedEffect(Unit) { runCatching { listState.scrollToItem(6) } }
+    // Riepilogo (statistiche/pulsanti/bilancio) = 5 item iniziali della stessa lista,
+    // scorrono via insieme ai mesi cosi' un mese intero si vede senza doverlo "liberare"
+    // da un header fisso. Luglio (mese 7, m=6) = 5 header + 6 = indice 11.
+    LaunchedEffect(Unit) { runCatching { listState.scrollToItem(11) } }
 
     Scaffold(
         topBar = {
@@ -474,40 +476,46 @@ fun DiaryApp() {
             )
         }
     ) { pad ->
-        Column(Modifier.padding(pad).fillMaxSize()) {
-            StatsRow(counts) { filter = it }
-            Legend()
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                FilledTonalButton(onClick = { showStats = true }, modifier = Modifier.weight(1f)) {
-                    Text("📊 Statistiche")
-                }
-                FilledTonalButton(onClick = { showHeatmap = true }, modifier = Modifier.weight(1f)) {
-                    Text("🗓️ Anno")
+        // Un'unica lista scorrevole: il riepilogo (statistiche/pulsanti/bilancio) scorre
+        // via insieme ai mesi, invece di restare fisso in cima a rubare spazio verticale.
+        // Cosi' quando arrivi a un mese lo vedi INTERO, non tagliato in fondo allo schermo.
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.padding(pad).fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            item { StatsRow(counts) { filter = it } }
+            item { Legend() }
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilledTonalButton(onClick = { showStats = true }, modifier = Modifier.weight(1f)) {
+                        Text("📊 Statistiche")
+                    }
+                    FilledTonalButton(onClick = { showHeatmap = true }, modifier = Modifier.weight(1f)) {
+                        Text("🗓️ Anno")
+                    }
                 }
             }
-            FilledTonalButton(
-                onClick = { importFromGarmin() },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 4.dp)
-            ) {
-                Text("⌚  Sincronizza Garmin ora")
-            }
-            MonthBalanceCard(data)
-            LazyColumn(
-                state = listState,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                items(12) { m ->
-                    MonthView(
-                        month = m + 1,
-                        data = data,
-                        today = LocalDate.now(),
-                        onDayClick = { key -> editingKey = key }
-                    )
+            item {
+                FilledTonalButton(
+                    onClick = { importFromGarmin() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("⌚  Sincronizza Garmin ora")
                 }
+            }
+            item { MonthBalanceCard(data) }
+            items(12) { m ->
+                MonthView(
+                    month = m + 1,
+                    data = data,
+                    today = LocalDate.now(),
+                    onDayClick = { key -> editingKey = key }
+                )
             }
         }
     }
@@ -564,7 +572,7 @@ fun DiaryApp() {
 @Composable
 private fun StatsRow(c: Counts, onFilter: (FilterType) -> Unit) {
     FlowRow(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
@@ -595,7 +603,7 @@ private fun StatCard(n: Int, filter: FilterType, onFilter: (FilterType) -> Unit)
 @Composable
 private fun Legend() {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 2.dp),
+        Modifier.fillMaxWidth().padding(vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text("🍺 Alcool", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1381,7 +1389,7 @@ private fun MonthBalanceCard(data: SnapshotStateMap<String, DayRecord>) {
     }
     if (burned == 0 && consumed == 0) return
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
