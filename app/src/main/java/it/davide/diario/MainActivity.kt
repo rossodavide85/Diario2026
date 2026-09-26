@@ -447,14 +447,14 @@ fun DiaryApp() {
     }
 
     val listState = rememberLazyListState()
-    // Riepilogo (statistiche/pulsanti/bilancio) = 5 item iniziali della stessa lista,
-    // scorrono via insieme ai mesi cosi' un mese intero si vede senza doverlo "liberare"
-    // da un header fisso. Si apre sul MESE CORRENTE (non piu' un mese fisso): cosi' non
-    // c'e' mai da scrollare tanto per arrivarci, indipendentemente da che mese sia.
+    // Il riepilogo (statistiche/pulsanti/bilancio) e' UN SOLO item, richiudibile: cosi'
+    // il mese corrente resta in primo piano appena sotto, non sepolto sotto blocchi fissi.
+    // Si apre sul MESE CORRENTE (non piu' un mese fisso): cosi' non c'e' mai da scrollare
+    // tanto per arrivarci, indipendentemente da che mese sia.
     LaunchedEffect(Unit) {
         val today = LocalDate.now()
         val curMonth = if (today.year == YEAR) today.monthValue else 1  // fuori dall'anno del diario: parti da gennaio
-        runCatching { listState.scrollToItem(5 + (curMonth - 1)) }
+        runCatching { listState.scrollToItem(1 + (curMonth - 1)) }
     }
 
     Scaffold(
@@ -490,30 +490,16 @@ fun DiaryApp() {
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            item { StatsRow(counts) { filter = it } }
-            item { Legend() }
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilledTonalButton(onClick = { showStats = true }, modifier = Modifier.weight(1f)) {
-                        Text("📊 Statistiche")
-                    }
-                    FilledTonalButton(onClick = { showHeatmap = true }, modifier = Modifier.weight(1f)) {
-                        Text("🗓️ Anno")
-                    }
-                }
+                CollapsibleSummary(
+                    counts = counts,
+                    data = data,
+                    onFilter = { filter = it },
+                    onShowStats = { showStats = true },
+                    onShowHeatmap = { showHeatmap = true },
+                    onSyncGarmin = { importFromGarmin() }
+                )
             }
-            item {
-                FilledTonalButton(
-                    onClick = { importFromGarmin() },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("⌚  Sincronizza Garmin ora")
-                }
-            }
-            item { MonthBalanceCard(data) }
             items(12) { m ->
                 MonthView(
                     month = m + 1,
@@ -571,6 +557,68 @@ fun DiaryApp() {
             detail = detail,
             onClose = { detailKey = null }
         )
+    }
+}
+
+/**
+ * Statistiche/pulsanti/bilancio calorie, richiudibili dietro un'unica riga con una
+ * freccina (▶ chiuso, ▼ aperto) — cosi' il mese corrente resta in primo piano appena
+ * sotto, invece di essere sepolto da un blocco sempre visibile.
+ */
+@Composable
+private fun CollapsibleSummary(
+    counts: Counts,
+    data: SnapshotStateMap<String, DayRecord>,
+    onFilter: (FilterType) -> Unit,
+    onShowStats: () -> Unit,
+    onShowHeatmap: () -> Unit,
+    onSyncGarmin: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 4.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                "📊 Riepilogo",
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                if (expanded) "▼" else "▶",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (expanded) {
+            StatsRow(counts, onFilter)
+            Legend()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilledTonalButton(onClick = onShowStats, modifier = Modifier.weight(1f)) {
+                    Text("📊 Statistiche")
+                }
+                FilledTonalButton(onClick = onShowHeatmap, modifier = Modifier.weight(1f)) {
+                    Text("🗓️ Anno")
+                }
+            }
+            FilledTonalButton(
+                onClick = onSyncGarmin,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("⌚  Sincronizza Garmin ora")
+            }
+            MonthBalanceCard(data)
+        }
     }
 }
 
